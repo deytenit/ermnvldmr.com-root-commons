@@ -19,7 +19,7 @@ You should learn the following, before exploring the project:
 
 ### License
 
-GNU GPL 2.0 (see [Copyright & License](#copyright--license))
+MIT (see [Copyright & License](#copyright--license))
 
 ### Repository Structure
 
@@ -72,12 +72,13 @@ Want to submit improvements.
 
 ## Copyright & License
 
-**Source Code**: Licensed under the [GNU GPL 2.0](./LICENSE).
+**Source Code**: Licensed under the [MIT license](./LICENSE).
 
 ---
 
 **AI Assistance**:
 Significant portions of this project's _source code_ were developed with
 the assistance of AI code generation tools.
+_(Manually writing all those scripts would be tedious)_
 
 Copyright © 2026 Vladimir Eremin
