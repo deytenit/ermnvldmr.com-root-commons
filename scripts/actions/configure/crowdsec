@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+action_metadata() {
+  cat <<EOF
+description: "Configures CrowdSec."
+args:
+  - NODE: "The node name"
+EOF
+}
+
+NODE="${1:-}"
+if [[ -z "$NODE" ]]; then
+    log_error "Usage: $0 <node>"
+    exit 1
+fi
+export NODE
+
+NODE_DIR="$REPO_ROOT/$NODE"
+CONFIG_DIR="$NODE_DIR/.operator/configs/crowdsec"
+
+if [[ ! -d "$CONFIG_DIR" ]]; then
+    log_error "Configuration directory not found: $CONFIG_DIR"
+    exit 1
+fi
+
+log_info "Configuring CrowdSec for $NODE..."
+if ! command -v cscli >/dev/null 2>&1; then
+    log_info "CrowdSec not found, installing via official script..."
+    curl -s https://install.crowdsec.net | sudo sh
+    sudo apt list crowdsec
+    sudo apt install crowdsec
+fi
+
+envsubst_directory "$CONFIG_DIR" /etc/crowdsec
+
+log_info "Installing CrowdSec collections..."
+sudo cscli hub update 
+sudo cscli collections install crowdsecurity/linux
+sudo cscli collections install crowdsecurity/traefik
+
+if [[ -f "$CONFIG_DIR/bouncers/crowdsec-firewall-bouncer.yaml.local" ]]; then
+    if ! dpkg -l | grep -q crowdsec-firewall-bouncer-iptables; then
+        log_info "Installing crowdsec-firewall-bouncer-iptables..."
+        sudo apt-get update && sudo apt-get install -y crowdsec-firewall-bouncer-iptables
+    fi
+fi
+log_success "Successfully configured crowdsec for $NODE."

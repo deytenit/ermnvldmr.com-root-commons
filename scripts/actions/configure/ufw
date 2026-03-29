@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+
+action_metadata() {
+  cat <<EOF
+description: "Configures UFW using envsubst."
+args:
+  - NODE: "The node name"
+EOF
+}
+
+NODE="${1:-}"
+if [[ -z "$NODE" ]]; then
+    log_error "Usage: $0 <node>"
+    exit 1
+fi
+export NODE
+
+NODE_DIR="$REPO_ROOT/$NODE"
+CONFIG_DIR="$NODE_DIR/.operator/configs/ufw"
+
+if [[ ! -d "$CONFIG_DIR" ]]; then
+    log_error "Configuration directory not found: $CONFIG_DIR"
+    exit 1
+fi
+
+log_info "Configuring UFW rules for $NODE..."
+docker_rules_dir="$CONFIG_DIR/docker"
+host_config_dir="$CONFIG_DIR/host"
+
+if [[ -d "$docker_rules_dir" ]]; then
+    envsubst_ufw "$docker_rules_dir" "$host_config_dir"
+else
+    log_warn "Docker rules directory not found at $docker_rules_dir. Skipping ufw-docker rules."
+    if [[ -d "$host_config_dir" ]]; then
+        envsubst_ufw "$docker_rules_dir" "$host_config_dir"
+    fi
+fi
+log_success "Successfully configured ufw for $NODE."

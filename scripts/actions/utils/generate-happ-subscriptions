@@ -1,0 +1,63 @@
+#!/bin/bash
+#
+# generate-happ-subscriptions: Generate .psub files from a JSON config via Docker.
+# Usage:
+#   ./generate-happ-subscriptions <input_json> <output_dir>
+
+action_metadata() {
+  cat <<EOF
+description: "Generate .psub files from a JSON config via Docker."
+args:
+  - input_json: "The input JSON configuration file"
+  - output_dir: "The directory to output the generated .psub files"
+EOF
+}
+
+# --- Script-specific settings ---
+SCRIPT_NAME="generate-happ-subscriptions"
+IMAGE_NAME="happ-subscription-generator"
+DOCKER_SOURCE_DIR=".operator/source/happ-subscription-generator"
+
+# --- Initialize ---
+navigate_to_repo_root
+
+# --- Argument Validation ---
+require_arg "INPUT_JSON" "${1:-}" "Usage: $0 <input_json> <output_dir>"
+require_arg "OUTPUT_DIR" "${2:-}" "Usage: $0 <input_json> <output_dir>"
+
+INPUT_JSON_PATH=$(realpath "$1")
+OUTPUT_DIR_PATH=$(realpath "$2")
+
+# --- Ensure Docker is available ---
+if ! command -v docker >/dev/null 2>&1; then
+    log_error "docker is not installed or not in PATH."
+    exit 1
+fi
+
+# --- Build the Docker Image ---
+log_info "Building Docker image: $IMAGE_NAME..."
+if ! docker build -t "$IMAGE_NAME" "$DOCKER_SOURCE_DIR"; then
+    log_error "Failed to build Docker image."
+    exit 1
+fi
+log_success "Docker image built successfully."
+
+# --- Run the Generator ---
+log_info "Running subscription generator..."
+log_info "Input: $INPUT_JSON_PATH"
+log_info "Output: $OUTPUT_DIR_PATH"
+
+# Mount the input file and output directory into the container.
+# The container expects: generator.py <input> <output>
+if docker run --rm \
+    -v "$INPUT_JSON_PATH:/app/input.json:ro" \
+    -v "$OUTPUT_DIR_PATH:/app/output:rw" \
+    "$IMAGE_NAME" \
+    /app/input.json /app/output; then
+    log_success "Subscription generation completed successfully."
+else
+    log_error "Subscription generation failed."
+    exit 1
+fi
+
+exit 0

@@ -1,0 +1,205 @@
+#!/usr/bin/env bash
+#
+# setup-tiers <node> <tier1_path> <tier2_path> <tier3_path>
+# Sets up symbolic link structure for @tier directories for a specific node and its projects
+
+set -euo pipefail
+IFS=$'\n\t'
+
+# --- 5. Check for sudo at the start ---
+if [[ $EUID -ne 0 ]]; then
+    echo "Error: This script must be run with sudo/root privileges."
+    exit 1
+fi
+
+action_metadata() {
+  cat <<EOF
+description: "Sets up symbolic link structure for @tier directories for a specific node and its projects."
+args:
+  - NODE: "The node name"
+  - TIER1_PATH: "Path to tier 1"
+  - TIER2_PATH: "Path to tier 2"
+  - TIER3_PATH: "Path to tier 3"
+EOF
+}
+
+REPO_ROOT_DIR="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+
+SCRIPT_NAME="setup-tiers"
+
+# --- Initialize ---
+navigate_to_repo_root
+
+# --- Parse arguments ---
+NODE="${1:-}"
+TIER1_PATH="${2:-}"
+TIER2_PATH="${3:-}"
+TIER3_PATH="${4:-}"
+
+require_arg "NODE" "$NODE" "Usage: sudo $0 <node> <tier1_path> <tier2_path> <tier3_path>"
+require_arg "TIER1_PATH" "$TIER1_PATH" "Usage: sudo $0 <node> <tier1_path> <tier2_path> <tier3_path>"
+require_arg "TIER2_PATH" "$TIER2_PATH" "Usage: sudo $0 <node> <tier1_path> <tier2_path> <tier3_path>"
+require_arg "TIER3_PATH" "$TIER3_PATH" "Usage: sudo $0 <node> <tier1_path> <tier2_path> <tier3_path>"
+
+# --- Convert to absolute paths ---
+TIER1_PATH="$(realpath -m "$TIER1_PATH")"
+TIER2_PATH="$(realpath -m "$TIER2_PATH")"
+TIER3_PATH="$(realpath -m "$TIER3_PATH")"
+
+log_info "Setting up @tier structure for node: $NODE"
+
+# --- Safety & Helper functions ---
+confirm_action() {
+    local message="$1"
+    local response
+    echo -n "$message [y/N]: "
+    read -r response
+    case "$response" in
+        [yY]|[yY][eE][sS]) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+safe_remove_link() {
+    local link_path="$1"
+    local description="$2"
+    if [[ -L "$link_path" ]]; then
+        rm "$link_path"
+    elif [[ -e "$link_path" ]]; then
+        log_warn "Path exists but is not a symlink: $link_path"
+        if confirm_action "Remove existing $description (NOT a symlink)?"; then
+            rm -rf "$link_path"
+        else
+            return 1
+        fi
+    fi
+    return 0
+}
+
+create_symlink() {
+    local target="$1"
+    local link_path="$2"
+    local description="$3"
+    ln -snf "$target" "$link_path"
+    log_success "Created $description symlink: $link_path -> $target"
+}
+
+# --- Discover projects for the given node ---
+discover_projects() {
+    local node_path="$REPO_ROOT/$NODE"
+    local projects=()
+    for entry in "$node_path"/*; do
+        [[ ! -d "$entry" ]] && continue
+        local project_name
+        project_name="$(basename "$entry")"
+        
+        # Explicitly ignore dot-dirs (covers .operator, .github, etc.)
+        [[ "$project_name" =~ ^\. ]] && continue
+
+        # Explicitly ignore created tiers
+	[[ "$project_name" =~ ^@ ]] && continue
+        
+        projects+=("$project_name")
+    done
+    printf '%s\n' "${projects[@]}"
+}
+
+# --- Shared & Project logic ---
+setup_tier_directory_structure() {
+    local project_name="$1" # e.g. "api-server"
+    
+    for tier_num in 1 2 3; do
+        local tier_var="TIER${tier_num}_PATH"
+        local tier_base="${!tier_var}"
+        
+        # 1. Create shared/ directory in each tier if it doesn't exist
+        local shared_base="$tier_base/shared"
+        mkdir -p "$shared_base"
+
+        # 4. Create directory for each project in {tier}/shared
+        mkdir -p "$shared_base/$project_name"
+
+        # Create the project's own directory in the tier
+        local project_tier_dir="$tier_base/$project_name"
+        mkdir -p "$project_tier_dir"
+
+        # 2. Symlink '../shared' in each project folder in tiers
+        local shared_link="$project_tier_dir/shared"
+        if safe_remove_link "$shared_link" "shared-internal"; then
+            # Using relative link as requested: '../shared'
+            ln -snf "../shared" "$shared_link"
+        fi
+    done
+}
+
+setup_project_links() {
+    local project_name="$1"
+    local project_dir="$REPO_ROOT/$NODE/$project_name"
+    
+    log_info "Processing project: $project_name"
+
+    # Setup the directory structure inside the /mnt/tiers first
+    setup_tier_directory_structure "$project_name"
+
+    # Create @tier symlinks inside the ACTUAL repository project folder
+    for tier_num in 1 2 3; do
+        local link_path="$project_dir/@tier$tier_num"
+        local tier_var="TIER${tier_num}_PATH"
+        local target="${!tier_var}/$project_name"
+        
+        if safe_remove_link "$link_path" "@tier$tier_num"; then
+            create_symlink "$target" "$link_path" "@tier$tier_num"
+        fi
+    done
+    
+    # Create .env symlink (pointing to tier1)
+    local env_link="$project_dir/.env"
+    local env_target="$TIER1_PATH/$project_name/.env"
+    if safe_remove_link "$env_link" ".env"; then
+        [[ ! -f "$env_target" ]] && touch "$env_target"
+        create_symlink "$env_target" "$env_link" ".env"
+    fi
+}
+
+main() {
+    log_info "Starting @tier setup process..."
+
+    # Ensure tier base directories exist
+    for tier_path in "$TIER1_PATH" "$TIER2_PATH" "$TIER3_PATH"; do
+        mkdir -p "$tier_path"
+    done
+
+    # 1. Create node-level symlinks (pointing to tier roots)
+    local node_dir="$REPO_ROOT/$NODE"
+    for tier_num in 1 2 3; do
+        local link_path="$node_dir/@tier$tier_num"
+        local tier_var="TIER${tier_num}_PATH"
+        local target="${!tier_var}"
+        
+        if safe_remove_link "$link_path" "node-@tier$tier_num"; then
+            create_symlink "$target" "$link_path" "node-@tier$tier_num"
+        fi
+
+	# Ensure .operator storage exists in each tier for node-level data
+        mkdir -p "$target/.operator"
+    done
+
+    # Create node-level .env symlink (pointing to tier1/.operator/.env)
+    local node_env_link="$node_dir/.env"
+    local node_env_target="$TIER1_PATH/.operator/.env"
+    if safe_remove_link "$node_env_link" "node-.env"; then
+        [[ ! -f "$node_env_target" ]] && touch "$node_env_target"
+        create_symlink "$node_env_target" "$node_env_link" "node-.env"
+    fi
+
+    # 2. Process all projects found in the node
+    readarray -t projects < <(discover_projects)
+    for project in "${projects[@]}"; do
+        [[ -z "$project" ]] && continue
+        setup_project_links "$project"
+    done
+
+    log_success "✅ @tier setup completed successfully!"
+}
+
+main "$@"

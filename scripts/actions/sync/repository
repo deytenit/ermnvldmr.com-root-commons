@@ -1,0 +1,111 @@
+#!/bin/bash
+#
+# sync-remote <NODE> <TELEGRAM_BOT_URL>
+# Adds changes in the <NODE> directory, commits them to a sync/<NODE> branch,
+# rebases onto origin/trunk, and force-pushes. Notifies via Telegram.
+
+action_metadata() {
+  cat <<EOF
+description: "Adds changes in the node directory, commits them, rebases onto origin/trunk, and force-pushes."
+args:
+  - NODE: "The node name"
+  - TELEGRAM_BOT_URL: "The Telegram Bot URL for notifications"
+EOF
+}
+
+# --- Script-specific settings ---
+SCRIPT_NAME="sync-remote"
+
+# --- Argument Parsing and Validation ---
+NODE="${1:-}"
+TELEGRAM_BOT_URL="${2:-}"
+
+require_arg "NODE" "$NODE" "Usage: $0 <NODE> <TELEGRAM_BOT_URL>"
+require_arg "TELEGRAM_BOT_URL" "$TELEGRAM_BOT_URL" "Usage: $0 <NODE> <TELEGRAM_BOT_URL>"
+
+# --- Initialize ---
+navigate_to_repo_root # REPO_ROOT is set here, and we cd to it
+
+# --- Setup Error Handling ---
+TELEGRAM_TITLE_PREFIX="Annual Remote Sync"
+setup_error_trap "$TELEGRAM_TITLE_PREFIX" "$TELEGRAM_BOT_URL" "$NODE"
+
+log_info "Starting remote sync for node: $NODE"
+
+# --- Check if submodule is dirty ---
+if [ -n "$(git -C "$REPO_ROOT/.operator/shared" status --porcelain)" ]; then
+    log_error "Submodule at $REPO_ROOT/.operator/shared is dirty. Aborting sync."
+    exit 1
+fi
+
+# --- Ensure that the NODE directory exists ---
+NODE_DIR_PATH="$REPO_ROOT/$NODE" # Construct full path
+if [ ! -d "$NODE_DIR_PATH" ]; then
+    # This error will be caught by the trap and a Telegram message sent.
+    log_error "Directory '$NODE_DIR_PATH' does not exist in the repository root. Cannot sync."
+    exit 1 # Exit, trap will handle notification
+fi
+log_info "Node directory '$NODE_DIR_PATH' found."
+
+# --- Git Operations ---
+# Add the NODE folder to the staging area. We are already in REPO_ROOT.
+log_info "Staging changes in '$NODE' directory..."
+git add "$NODE" # Path relative to REPO_ROOT
+
+BRANCH_NAME="sync/$NODE"
+COMMIT_TIMESTAMP=$(get_timestamp) # For commit message
+
+# Add these variables for bot identity:
+export GIT_AUTHOR_NAME="Adam Jensen [bot]"
+export GIT_AUTHOR_EMAIL="adam@ermnvldmr.com"
+export GIT_COMMITTER_NAME="Adam Jensen [bot]"
+export GIT_COMMITTER_EMAIL="adam@ermnvldmr.com"
+
+# Create the "sync/{NODE}" branch if it doesn't exist and check out
+log_info "Switching to branch '$BRANCH_NAME'..."
+if ! git rev-parse --verify "$BRANCH_NAME" > /dev/null 2>&1; then
+    log_info "Branch '$BRANCH_NAME' does not exist. Creating and checking out."
+    git checkout -b "$BRANCH_NAME"
+else
+    log_info "Branch '$BRANCH_NAME' exists. Checking out."
+    git checkout "$BRANCH_NAME"
+fi
+
+# Check if there are any changes staged for commit
+if ! git diff --cached --quiet; then # --quiet to suppress output, rely on exit code
+    log_info "Changes detected. Committing..."
+    git commit -m "[$NODE] Auto-commit: $COMMIT_TIMESTAMP"
+    log_info "Commit successful."
+else
+    log_info "No changes to commit in '$NODE' directory."
+fi
+
+# Attempt to rebase onto origin/trunk
+log_info "Fetching origin/trunk..."
+git fetch origin trunk
+log_info "Rebasing '$BRANCH_NAME' onto origin/trunk..."
+if ! git rebase origin/trunk; then
+    # Error will be caught by trap, but specific message is good.
+    log_error "Rebase conflict detected for branch '$BRANCH_NAME' onto origin/trunk. Aborting rebase. Manual intervention required."
+    git rebase --abort # Clean up failed rebase
+    # Trap will send a generic error, but we can send a more specific one here too.
+    telegram_error "$TELEGRAM_TITLE_PREFIX" "$TELEGRAM_BOT_URL" "Rebase conflict. Manual intervention required. Rebase aborted." "$NODE"
+    exit 1
+fi
+log_info "Rebase successful."
+
+# Push the changes to the remote repository
+log_info "Pushing changes for branch '$BRANCH_NAME' to origin (force-with-lease)..."
+if git push --force-with-lease origin "$BRANCH_NAME"; then
+    log_success "Successfully pushed '$BRANCH_NAME' to origin."
+    telegram_success "$TELEGRAM_TITLE_PREFIX" "$TELEGRAM_BOT_URL" "Sync to remote branch '$BRANCH_NAME' completed successfully." "$NODE"
+else
+    # Error will be caught by trap.
+    log_error "Failed to push '$BRANCH_NAME' to origin."
+    # Trap will send a generic error.
+    telegram_error "$TELEGRAM_TITLE_PREFIX" "$TELEGRAM_BOT_URL" "Failed to push to remote branch '$BRANCH_NAME'." "$NODE"
+    exit 1
+fi
+
+log_success "Remote sync completed for node: $NODE."
+

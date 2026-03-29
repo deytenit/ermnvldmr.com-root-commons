@@ -1,0 +1,131 @@
+#!/usr/bin/env bash
+#
+# root compose <node> <action> [--dry-run] [extra_args...]
+# Standardized high-level entrypoint for orchestrating docker-compose across a node.
+
+set -euo pipefail
+
+action_metadata() {
+  cat <<EOF
+description: "Standardized high-level entrypoint for orchestrating docker-compose across a node."
+args:
+  - NODE: "The node name"
+  - ACTION: "The action to perform (up, down, restart)"
+  - EXTRA_ARGS: "Optional extra arguments, such as --dry-run"
+EOF
+}
+
+REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+SCRIPT_NAME="compose"
+
+# --- Parse Arguments ---
+NODE="${1:-}"
+ACTION="${2:-}"
+shift 2 || true
+
+DRY_RUN=false
+EXTRA_ARGS=()
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --dry-run)
+            DRY_RUN=true
+            shift
+            ;;
+        *)
+            EXTRA_ARGS+=("$1")
+            shift
+            ;;
+    esac
+done
+
+if [[ -z "$NODE" || -z "$ACTION" ]]; then
+    log_error "Usage: $0 <node> <action (up|down|restart)> [--dry-run] [extra_args...]"
+    exit 1
+fi
+
+# --- Validation ---
+NODE_DIR="$REPO_ROOT/$NODE"
+if [[ ! -d "$NODE_DIR" ]]; then
+    log_error "Node directory not found: $NODE_DIR"
+    exit 1
+fi
+
+# --- Helper Functions ---
+run_compose() {
+    local compose_file="$1"
+    local action="$2"
+    local dir_path="$(dirname "$compose_file")"
+    local service_name="$(basename "$dir_path")"
+    
+    # If the dir is the node root, name it "node-infra"
+    if [[ "$dir_path" == "$NODE_DIR" ]]; then
+        service_name="node-infra"
+    fi
+
+    log_info "Executing $action on $service_name..."
+    
+    local cmd=(docker compose -f "$compose_file" "$action")
+    if [[ "$action" != "down" ]]; then
+        cmd+=("-d")
+    fi
+    cmd+=("${EXTRA_ARGS[@]}")
+
+    if [[ "$DRY_RUN" == "true" ]]; then
+        log_info "[DRY-RUN] ${cmd[*]}"
+    else
+        (cd "$dir_path" && "${cmd[@]}")
+    fi
+}
+
+# --- Discovery ---
+services=()
+for entry in "$NODE_DIR"/*; do
+    [[ ! -d "$entry" ]] && continue
+    dir_name="$(basename "$entry")"
+    
+    # Exclude .operator and root (handled separately)
+    [[ "$dir_name" == ".operator" ]] && continue
+    [[ "$dir_name" == "root" ]] && continue
+    
+    if [[ -f "$entry/docker-compose.yml" ]]; then
+        services+=("$entry/docker-compose.yml")
+    fi
+done
+
+# Sort services alphabetically for stable order
+IFS=$'
+' sorted_services=($(sort <<<"${services[*]}"))
+unset IFS
+
+# --- Orchestration ---
+if [[ "$ACTION" == "down" ]]; then
+    # REVERSE ORDER: Others -> Root -> Node Infra
+    for s in "${sorted_services[@]}"; do
+        run_compose "$s" "$ACTION"
+    done
+    
+    if [[ -f "$NODE_DIR/root/docker-compose.yml" ]]; then
+        run_compose "$NODE_DIR/root/docker-compose.yml" "$ACTION"
+    fi
+    
+    if [[ -f "$NODE_DIR/docker-compose.yml" ]]; then
+        run_compose "$NODE_DIR/docker-compose.yml" "$ACTION"
+    fi
+else
+    # FORWARD ORDER: Node Infra -> Root -> Others
+    if [[ -f "$NODE_DIR/docker-compose.yml" ]]; then
+        run_compose "$NODE_DIR/docker-compose.yml" "$ACTION"
+    fi
+    
+    if [[ -f "$NODE_DIR/root/docker-compose.yml" ]]; then
+        run_compose "$NODE_DIR/root/docker-compose.yml" "$ACTION"
+    fi
+    
+    for s in "${sorted_services[@]}"; do
+        run_compose "$s" "$ACTION"
+    done
+fi
+
+log_success "Successfully orchestrated $ACTION for node $NODE."
+node $NODE."

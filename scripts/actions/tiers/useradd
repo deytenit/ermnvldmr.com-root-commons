@@ -1,0 +1,289 @@
+#!/usr/bin/env bash
+#
+# setup-noroot-users <node>
+# Create a system user for each project under the node directory.
+# Username pattern: noroot-{sanitized-project-name}
+# - system user (useradd -r)
+# - no home (no homedir)
+# - locked password
+# - member of 'noroot-shared' group
+#
+# Additionally: if /<repo-root>/<node>/<project>/.env exists, insert or replace
+# the following auto-generated block at the top of the file:
+#
+# # START AUTO GENERATED SETUP-NOROOT-USERS
+# UID={uid}
+# GID={gid}
+# SHARED_GID={shared_gid}
+# # END AUTO GENERATED SETUP-NOROOT-USERS
+#
+set -euo pipefail
+IFS=$'\n\t'
+
+action_metadata() {
+  cat <<EOF
+description: "Create a system user for each project under the node directory."
+args:
+  - NODE: "The node name"
+EOF
+}
+
+SCRIPT_NAME="setup-noroot-users"
+
+navigate_to_repo_root
+
+NODE="${1:-}"
+
+require_arg "NODE" "$NODE" "Usage: $0 <node>"
+
+# --- Require root ---
+if [[ $EUID -ne 0 ]]; then
+    echo "ERROR: must be run as root" >&2
+    exit 2
+fi
+
+NODE_PATH="$REPO_ROOT/$NODE"
+if [[ ! -d "$NODE_PATH" ]]; then
+    echo "ERROR: node path not found: $NODE_PATH" >&2
+    exit 3
+fi
+
+# --- Ensure noroot-shared group exists ---
+SHARED_GROUP="noroot-shared"
+SHARED_GID=""
+
+ensure_shared_group() {
+    if getent group "$SHARED_GROUP" >/dev/null 2>&1; then
+        log_info "Shared group '$SHARED_GROUP' already exists"
+        SHARED_GID=$(getent group "$SHARED_GROUP" | cut -d: -f3)
+    else
+        log_info "Creating shared group: $SHARED_GROUP"
+        groupadd -r "$SHARED_GROUP"
+        SHARED_GID=$(getent group "$SHARED_GROUP" | cut -d: -f3)
+        log_success "Created shared group: $SHARED_GROUP (GID: $SHARED_GID)"
+    fi
+}
+
+# Sanitize project to valid username suffix:
+# - lower-case
+# - replace non [a-z0-9] with '-'
+# - collapse repeated '-' and trim to max length (we leave room for 'noroot-' prefix)
+sanitize() {
+    local raw="$1"
+    local s
+    s="$(printf '%s' "$raw" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/-/g' | sed -E 's/^-+//; s/-+$//; s/-+/-/g')"
+    if [[ -z "$s" ]]; then s="project"; fi
+    local max_suffix=24
+    if [[ ${#s} -gt $max_suffix ]]; then
+        s="${s:0:$max_suffix}"
+        s="$(printf '%s' "$s" | sed -E 's/-+$//')"
+    fi
+    printf '%s' "$s"
+}
+
+# Discover projects (directories immediately under node)
+discover_projects() {
+    local node_path="$1"
+    local entry project_name
+    for entry in "$node_path"/*; do
+        [[ -d "$entry" ]] || continue
+        project_name="$(basename "$entry")"
+        [[ "$project_name" =~ ^\. ]] && continue
+	[[ "$project_name" =~ ^@ ]] && continue
+        printf '%s\n' "$project_name"
+    done
+}
+
+# Create a system user if not exists. Returns:
+# 0 = created
+# 1 = existed (no action)
+create_system_user() {
+    local username="$1"
+    local project="$2"
+
+    if getent passwd "$username" >/dev/null 2>&1; then
+        return 1
+    fi
+
+    useradd -r -M -d /nonexistent -s /usr/sbin/nologin -c "System user for project $project" -U "$username"
+
+    if command -v passwd >/dev/null 2>&1; then
+        passwd -l "$username" >/dev/null 2>&1 || true
+    fi
+
+    return 0
+}
+
+# Add user to shared group if not already a member
+add_user_to_shared_group() {
+    local username="$1"
+    
+    # Check if user is already in the group
+    if groups "$username" 2>/dev/null | grep -q "\b$SHARED_GROUP\b"; then
+        log_info "User '$username' is already a member of '$SHARED_GROUP'"
+        return 0
+    fi
+    
+    log_info "Adding user '$username' to shared group '$SHARED_GROUP'"
+    usermod -aG "$SHARED_GROUP" "$username"
+    log_success "User '$username' added to '$SHARED_GROUP'"
+}
+
+# Update (insert or replace) the auto-generated UID/GID block in a .env file.
+# Handles symlinks properly by following them to the actual file.
+update_env_file_with_uid_gid() {
+    local env_path="$1"
+    local uid="$2"
+    local gid="$3"
+    local shared_gid="$4"
+
+    # Only operate if file exists (not broken symlink)
+    if [[ ! -e "$env_path" ]]; then
+        log_info "Skipping .env update for (not exists): $env_path"
+        return 0
+    fi
+
+    # If it's a symlink, resolve to the actual file
+    local actual_file="$env_path"
+    if [[ -L "$env_path" ]]; then
+        actual_file="$(readlink -f "$env_path")"
+        log_info ".env is a symlink: $env_path -> $actual_file"
+    fi
+
+    local start_marker="# START AUTO GENERATED SETUP-NOROOT-USERS"
+    local end_marker="# END AUTO GENERATED SETUP-NOROOT-USERS"
+
+    # Prepare temp file in same directory as the actual file (to avoid cross-device rename issues)
+    local dir
+    dir="$(dirname "$actual_file")"
+    local tmp
+    tmp="$(mktemp "$dir/.env.tmp.XXXX")"
+
+    # Preserve original ownership and mode if possible
+    local orig_owner="$(stat -c '%u:%g' -- "$actual_file")" || orig_owner="0:0"
+    local orig_mode="$(stat -c '%a' -- "$actual_file")" || orig_mode="644"
+
+    # If file contains start marker, replace the block; otherwise prepend the block
+    if grep -qF "$start_marker" -- "$actual_file"; then
+        # Replace everything from start_marker to end_marker (inclusive) with new block
+        awk -v s="$start_marker" -v e="$end_marker" -v U="$uid" -v G="$gid" -v SG="$shared_gid" '
+            BEGIN{inblock=0}
+            $0==s {print s; print "UID="U; print "GID="G; print "SHARED_GID="SG; inblock=1; next}
+            $0==e {print e; inblock=0; next}
+            { if(!inblock) print $0 }
+        ' "$actual_file" > "$tmp"
+    else
+        # Prepend block
+        {
+            printf '%s\n' "$start_marker"
+            printf 'UID=%s\n' "$uid"
+            printf 'GID=%s\n' "$gid"
+            printf 'SHARED_GID=%s\n' "$shared_gid"
+            printf '%s\n' "$end_marker"
+            printf '\n'
+            cat -- "$actual_file"
+        } > "$tmp"
+    fi
+
+    # Restore ownership and permissions on tmp then atomically move to actual file
+    IFS=':' read -r ou og <<<"$orig_owner"
+    chown "$ou:$og" "$tmp" || true
+    chmod "$orig_mode" "$tmp" || true
+    mv -f "$tmp" "$actual_file"
+
+    log_success "Updated .env with UID/GID/SHARED_GID: $actual_file -> UID=$uid GID=$gid SHARED_GID=$shared_gid"
+}
+
+# --- Main loop ----
+
+# First, ensure the shared group exists
+ensure_shared_group
+
+declare -A used_usernames=()
+created_list=()
+touched_list=()
+
+while IFS= read -r project; do
+    [[ -z "$project" ]] && continue
+    project_name="$project"
+    sanitized="$(sanitize "$project_name")"
+    base_username="noroot-$sanitized"
+
+    candidate="$base_username"
+    suffix=1
+    while :; do
+        if [[ -n "${used_usernames[$candidate]:-}" ]]; then
+            candidate="${base_username}-${suffix}"
+            suffix=$((suffix+1))
+            continue
+        fi
+        if getent passwd "$candidate" >/dev/null 2>&1; then
+            if [[ -n "${used_usernames[$candidate]:-}" ]]; then
+                candidate="${base_username}-${suffix}"
+                suffix=$((suffix+1))
+                continue
+            fi
+        fi
+        break
+    done
+
+    used_usernames["$candidate"]="$project_name"
+
+    if create_system_user "$candidate" "$project_name"; then
+        log_success "Created system user: $candidate (for project: $project_name)"
+        created_list+=("$candidate:$project_name")
+        status="created"
+    else
+        log_info "User already exists: $candidate (skipping create) -> project: $project_name"
+        status="exists"
+    fi
+
+    # Add user to shared group
+    add_user_to_shared_group "$candidate"
+
+    # Get UID:GID of the (existing or newly created) user
+    if getent passwd "$candidate" >/dev/null 2>&1; then
+        IFS=':' read -r _ _ uid gid _ _ _ < <(getent passwd "$candidate")
+    else
+        uid=""
+        gid=""
+    fi
+
+    touched_list+=("$candidate:$project_name:$status:$uid:$gid")
+
+    # Update project's .env if it exists
+    project_env_path="$NODE_PATH/$project_name/.env"
+    if [[ -n "$uid" && -n "$gid" && -n "$SHARED_GID" && -e "$project_env_path" ]]; then
+        update_env_file_with_uid_gid "$project_env_path" "$uid" "$gid" "$SHARED_GID"
+    else
+        if [[ -e "$project_env_path" ]]; then
+            log_warn "Could not determine UID/GID/SHARED_GID for $candidate; skipping .env update for $project_env_path"
+        else
+            log_info "No .env present for project: $project_name (path: $project_env_path)"
+        fi
+    fi
+
+done < <(discover_projects "$NODE_PATH")
+
+# --- Print final UID:GID listing for each touched username ---
+printf '\n'
+log_info "Final UID:GID for users processed:"
+printf '%-32s %-10s %-15s %s\n' "USERNAME" "UID:GID" "SHARED_GID" "PROJECT (status)"
+for entry in "${touched_list[@]}"; do
+    IFS=':' read -r uname proj status uid gid <<<"$entry"
+    if [[ -n "$uid" && -n "$gid" ]]; then
+        printf '%-32s %-10s %-15s %s (%s)\n' "$uname" "${uid}:${gid}" "$SHARED_GID" "$proj" "$status"
+    else
+        printf '%-32s %-10s %-15s %s (%s)\n' "$uname" "N/A" "N/A" "$proj" "$status"
+    fi
+done
+
+printf '\n'
+log_info "Shared group: $SHARED_GROUP (GID: $SHARED_GID)"
+if (( ${#created_list[@]} > 0 )); then
+    log_success "Created ${#created_list[@]} new system user(s)."
+else
+    log_info "No new system users were created."
+fi
+
+exit 0

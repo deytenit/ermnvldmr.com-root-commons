@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+
+action_metadata() {
+  cat <<EOF
+description: "Configures crontab."
+args:
+  - NODE: "The node name"
+EOF
+}
+
+NODE="${1:-}"
+if [[ -z "$NODE" ]]; then
+    log_error "Usage: $0 <node>"
+    exit 1
+fi
+export NODE
+
+NODE_DIR="$REPO_ROOT/$NODE"
+CONFIG_DIR="$NODE_DIR/.operator/configs/cron"
+CRONTAB_FILE="$CONFIG_DIR/crontab"
+
+if [[ -f "$CRONTAB_FILE" ]]; then
+    envsubst_crontab "$CRONTAB_FILE"
+else
+    log_error "Crontab file not found: $CRONTAB_FILE"
+    exit 1
+fi

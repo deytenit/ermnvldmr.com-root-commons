@@ -1,0 +1,189 @@
+#!/bin/bash
+#
+# check-package-updates <NODE> <TELEGRAM_BOT_URL>
+# Checks for pending security updates and Docker image updates, then sends a Telegram notification.
+
+action_metadata() {
+  cat <<EOF
+description: "Checks for pending security updates and Docker image updates, then sends a Telegram notification."
+args:
+  - NODE: "The node to check"
+  - TELEGRAM_BOT_URL: "The Telegram Bot URL for notifications"
+EOF
+}
+
+# --- Script-specific settings ---
+SCRIPT_NAME="check-package-updates"
+
+# --- Argument Parsing and Validation ---
+NODE="${1:-}"
+TELEGRAM_BOT_URL="${2:-}"
+
+require_arg "NODE" "$NODE" "Usage: $0 <NODE> <TELEGRAM_BOT_URL>"
+require_arg "TELEGRAM_BOT_URL" "$TELEGRAM_BOT_URL" "Usage: $0 <NODE> <TELEGRAM_BOT_URL>"
+
+# --- Setup Error Handling ---
+# This will send a Telegram notification if the script encounters an unhandled error
+setup_error_trap "Deytzwerk Security Updates" "$TELEGRAM_BOT_URL" "$NODE"
+
+log_info "Starting security update check for node: $NODE"
+
+# --- Initialize result variables ---
+PACKAGES_RESULT=""
+PACKAGES_ERROR=""
+IMAGES_RESULT=""
+IMAGES_ERROR=""
+
+# --- Check Package Updates ---
+log_info "Updating package lists (apt-get update)..."
+if sudo apt-get update > /dev/null 2>&1; then
+    log_info "Package lists updated successfully."
+    
+    log_info "Checking for available upgrades (security and non-security)..."
+    # Using --just-print to avoid accidental upgrades and parse output
+    # Grep for lines starting with "Inst" which indicates an installable upgrade
+    # Cut to get the package name (second field)
+    # Sort for consistent output
+    UPDATES_LIST=$(sudo apt-get --just-print upgrade 2>/dev/null | grep "^Inst" | cut -d ' ' -f 2 | sort || true)
+    
+    if [ -n "$UPDATES_LIST" ]; then
+        UPDATES_COUNT=$(echo "$UPDATES_LIST" | wc -l)
+        # Format for Telegram: `package1`, `package2`, ...
+        FORMATTED_UPDATES=$(echo "$UPDATES_LIST" | awk '{printf "`%s`, ", $0}' | sed 's/, $//')
+        
+        log_info "$UPDATES_COUNT package updates found: $FORMATTED_UPDATES"
+        PACKAGES_RESULT="*Packages ($UPDATES_COUNT):* $FORMATTED_UPDATES"
+    else
+        log_info "No pending package updates found."
+        PACKAGES_RESULT="*Packages:* _none_"
+    fi
+else
+    log_error "Failed to update package lists or check for upgrades."
+    PACKAGES_ERROR="*Packages:* _Failed to check_"
+fi
+
+# --- Check Docker Image Updates ---
+log_info "Checking for Docker image updates..."
+
+# Check if docker and skopeo are available
+if ! command -v docker >/dev/null 2>&1; then
+    log_warn "Docker is not installed or not in PATH. Skipping image check."
+    IMAGES_ERROR="*Images:* _Docker not available_"
+elif ! command -v skopeo >/dev/null 2>&1; then
+    log_warn "skopeo is not installed or not in PATH. Skipping image check."
+    IMAGES_ERROR="*Images:* _skopeo not available_"
+else
+    # Get all running container images
+    RUNNING_IMAGES=$(docker ps --format '{{.Image}}' 2>/dev/null | sort -u || true)
+    
+    if [ -z "$RUNNING_IMAGES" ]; then
+        log_info "No running Docker containers found."
+        IMAGES_RESULT="*Images:* _none_"
+    else
+        OUTDATED_IMAGES=()
+        
+        while IFS= read -r image; do
+            [ -z "$image" ] && continue
+            
+            log_info "Checking image: $image"
+            
+            # Parse image name and tag
+            if [[ "$image" =~ ^([^:]+):(.+)$ ]]; then
+                IMAGE_NAME="${BASH_REMATCH[1]}"
+                CURRENT_TAG="${BASH_REMATCH[2]}"
+            else
+                IMAGE_NAME="$image"
+                CURRENT_TAG="latest"
+            fi
+            
+            # Get local image digest
+            LOCAL_DIGEST=$(docker image inspect "$image" --format '{{index .RepoDigests 0}}' 2>/dev/null | cut -d '@' -f 2 || true)
+            
+            if [ -z "$LOCAL_DIGEST" ]; then
+                log_warn "Could not get local digest for $image, skipping."
+                continue
+            fi
+            
+            # Construct registry URL (handle docker.io specially)
+            if [[ "$IMAGE_NAME" != */* ]]; then
+                REGISTRY_IMAGE="docker.io/library/$IMAGE_NAME"
+            elif [[ "$IMAGE_NAME" != *.*/* ]]; then
+                REGISTRY_IMAGE="docker.io/$IMAGE_NAME"
+            else
+                REGISTRY_IMAGE="$IMAGE_NAME"
+            fi
+            
+            # Get remote digest for the same tag
+            REMOTE_DIGEST=$(skopeo inspect "docker://${REGISTRY_IMAGE}:${CURRENT_TAG}" 2>/dev/null | grep -o '"Digest"[[:space:]]*:[[:space:]]*"[^"]*"' | cut -d '"' -f 4 || true)
+            
+            if [ -z "$REMOTE_DIGEST" ]; then
+                log_warn "Could not get remote digest for $image, skipping."
+                continue
+            fi
+            
+            # Compare digests
+            if [ "$LOCAL_DIGEST" != "$REMOTE_DIGEST" ]; then
+                log_info "Update available for: $image"
+                # Store the full image name (without registry prefix if docker.io)
+                if [[ "$IMAGE_NAME" == docker.io/* ]]; then
+                    DISPLAY_NAME="${IMAGE_NAME#docker.io/}"
+                    # Remove library/ prefix for official images
+                    DISPLAY_NAME="${DISPLAY_NAME#library/}"
+                else
+                    DISPLAY_NAME="$IMAGE_NAME"
+                fi
+                OUTDATED_IMAGES+=("$DISPLAY_NAME")
+            else
+                log_info "Image up to date: $image"
+            fi
+        done <<< "$RUNNING_IMAGES"
+        
+        if [ ${#OUTDATED_IMAGES[@]} -gt 0 ]; then
+            IMAGES_COUNT=${#OUTDATED_IMAGES[@]}
+            # Format for Telegram: `image1`, `image2`, ...
+            FORMATTED_IMAGES=$(printf '%s\n' "${OUTDATED_IMAGES[@]}" | awk '{printf "`%s`, ", $0}' | sed 's/, $//')
+            
+            log_info "$IMAGES_COUNT image updates found: $FORMATTED_IMAGES"
+            IMAGES_RESULT="*Images ($IMAGES_COUNT):* $FORMATTED_IMAGES"
+        else
+            log_info "All Docker images are up to date."
+            IMAGES_RESULT="*Images:* _none_"
+        fi
+    fi
+fi
+
+# --- Compose Final Message ---
+MESSAGE_BODY=""
+
+# Add APT section header
+MESSAGE_BODY="__APT:__"
+
+# Add package results
+if [ -n "$PACKAGES_ERROR" ]; then
+    MESSAGE_BODY="${MESSAGE_BODY}"$'\n'"${PACKAGES_ERROR}"
+elif [ -n "$PACKAGES_RESULT" ]; then
+    MESSAGE_BODY="${MESSAGE_BODY}"$'\n'"${PACKAGES_RESULT}"
+fi
+
+# Add Skopeo section header
+MESSAGE_BODY="${MESSAGE_BODY}"$'\n\n'"__Skopeo:__"
+
+# Add image results
+if [ -n "$IMAGES_ERROR" ]; then
+    MESSAGE_BODY="${MESSAGE_BODY}"$'\n'"${IMAGES_ERROR}"
+elif [ -n "$IMAGES_RESULT" ]; then
+    MESSAGE_BODY="${MESSAGE_BODY}"$'\n'"${IMAGES_RESULT}"
+fi
+
+# --- Send Telegram Notification ---
+if [ -n "$MESSAGE_BODY" ]; then
+    telegram_info "Annual Security Updates" \
+        "$TELEGRAM_BOT_URL" \
+        "$MESSAGE_BODY" \
+        "$NODE"
+    log_success "Update check completed and notification sent for node: $NODE"
+else
+    log_warn "No results to report."
+fi
+
+log_success "Security update check completed for node: $NODE."

@@ -1,0 +1,49 @@
+#!/usr/bin/env bash
+action_metadata() {
+  cat <<EOF
+description: "Configures systemd units."
+args:
+  - NODE: "The node name"
+EOF
+}
+
+NODE="${1:-}"
+if [[ -z "$NODE" ]]; then
+    log_error "Usage: $0 <node>"
+    exit 1
+fi
+export NODE
+export REPO_ROOT
+
+NODE_DIR="$REPO_ROOT/$NODE"
+CONFIG_DIR="$NODE_DIR/.operator/configs/systemd"
+
+if [[ ! -d "$CONFIG_DIR" ]]; then
+    log_error "Configuration directory not found: $CONFIG_DIR"
+    exit 1
+fi
+
+log_info "Deploying and configuring systemd units for $NODE..."
+if [[ -z "$(ls -A "$CONFIG_DIR" 2>/dev/null)" ]]; then
+    log_warn "No systemd configuration files found in $CONFIG_DIR."
+    exit 0
+fi
+
+for template_file in "$CONFIG_DIR"/*; do
+    if [[ -f "$template_file" ]]; then
+        file_name=$(basename "$template_file")
+        dest_file="/etc/systemd/system/$file_name"
+
+        log_info "Deploying systemd unit: $file_name -> $dest_file"
+        sudo -E bash -c "envsubst < \"$template_file\" > \"$dest_file\""
+        
+        if [[ "$file_name" == *.service ]]; then
+            service_name="${file_name%.service}"
+            log_info "Enabling and starting service: $service_name"
+            sudo systemctl daemon-reload
+            sudo systemctl enable --now "$service_name"
+            log_success "Service $service_name is now active and enabled."
+        fi
+    fi
+done
+log_success "Successfully configured systemd for $NODE."

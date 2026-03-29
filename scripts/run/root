@@ -1,0 +1,120 @@
+#!/usr/bin/env bash
+
+# Find the repository root
+REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+export REPO_ROOT
+
+SHARED_ROOT="$REPO_ROOT/.operator/shared"
+LOCAL_ROOT="$REPO_ROOT/.operator/local"
+
+# Implement "warm" environment check
+if [ "${ROOT_WARM:-}" != "true" ]; then
+    # Source shared libraries
+    if [ -d "$SHARED_ROOT/scripts/lib" ]; then
+        for lib in "$SHARED_ROOT"/scripts/lib/*.sh; do
+            if [ -f "$lib" ]; then
+                source "$lib"
+            fi
+        done
+    fi
+
+    # Source local libraries if they exist
+    if [ -d "$LOCAL_ROOT/scripts/lib" ]; then
+        for lib in "$LOCAL_ROOT"/scripts/lib/*.sh; do
+            if [ -f "$lib" ]; then
+                source "$lib"
+            fi
+        done
+    fi
+
+    export ROOT_WARM="true"
+fi
+
+# Function to extract and parse metadata
+parse_metadata() {
+    local script_path="$1"
+    local base_dir="$2"
+    
+    # Calculate relative path to use as command name (e.g. configure/ufw)
+    local rel_path="${script_path#$base_dir/}"
+    local script_name="$rel_path"
+    
+    # We need to run the script in a subshell just to get its metadata function
+    local metadata=$(bash -c "source '$script_path' >/dev/null 2>&1; type action_metadata >/dev/null 2>&1 && action_metadata" 2>/dev/null)
+    
+    if [ -n "$metadata" ]; then
+        local desc=$(echo "$metadata" | grep -E '^description:' | sed -E 's/^description:[[:space:]]*"(.*)"/\1/')
+        printf "  %-30s %s\n" "$script_name" "$desc"
+    else
+        printf "  %-30s (No description available)\n" "$script_name"
+    fi
+}
+
+# Function to recursively find scripts
+find_scripts() {
+    local dir="$1"
+    if [ -d "$dir" ]; then
+        find "$dir" -type f -executable -o -type f -name "*" ! -name "*.*" | sort
+    fi
+}
+
+ACTION="${1:-}"
+
+# Action parsing to support subcommands: e.g. root configure ufw
+# We allow passing 'configure ufw' or 'configure/ufw'
+if [ $# -ge 2 ]; then
+    POTENTIAL_ACTION="$1/$2"
+    if [ -f "$LOCAL_ROOT/scripts/actions/$POTENTIAL_ACTION" ] || [ -f "$SHARED_ROOT/scripts/actions/$POTENTIAL_ACTION" ]; then
+        ACTION="$POTENTIAL_ACTION"
+        shift 2
+    else
+        shift
+    fi
+else
+    shift || true
+fi
+
+# Help System
+if [ "$ACTION" == "--help" ] || [ -z "$ACTION" ]; then
+    echo "Usage: root <action|group action> [args...]"
+    echo ""
+    echo "Available Actions:"
+    
+    echo "--- Local Actions ---"
+    local has_local=false
+    if [ -d "$LOCAL_ROOT/scripts/actions" ]; then
+        for script in $(find_scripts "$LOCAL_ROOT/scripts/actions"); do
+            parse_metadata "$script" "$LOCAL_ROOT/scripts/actions"
+            has_local=true
+        done
+    fi
+    if [ "$has_local" = false ]; then
+        echo "  (None)"
+    fi
+
+    echo ""
+    echo "--- Shared Actions ---"
+    local has_shared=false
+    if [ -d "$SHARED_ROOT/scripts/actions" ]; then
+        for script in $(find_scripts "$SHARED_ROOT/scripts/actions"); do
+            parse_metadata "$script" "$SHARED_ROOT/scripts/actions"
+            has_shared=true
+        done
+    fi
+    if [ "$has_shared" = false ]; then
+        echo "  (None)"
+    fi
+    exit 0
+fi
+
+# Command Dispatcher
+if [ -f "$LOCAL_ROOT/scripts/actions/$ACTION" ]; then
+    # Execute local action
+    source "$LOCAL_ROOT/scripts/actions/$ACTION" "$@"
+elif [ -f "$SHARED_ROOT/scripts/actions/$ACTION" ]; then
+    # Execute shared action
+    source "$SHARED_ROOT/scripts/actions/$ACTION" "$@"
+else
+    echo "Error: Unknown action '$ACTION'" >&2
+    exit 1
+fi
