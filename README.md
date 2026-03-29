@@ -1,5 +1,5 @@
 <p align="center">
-  <img alt="root.ermnvldmr.com commons logo" src="./assets/logo.png" height="128" />
+  <img alt="ermnvldmr.com-root-commons logo" src="./assets/logo.png" height="128" />
 </p>
 
 # Commons of root.ermnvldmr.com
