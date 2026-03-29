@@ -166,7 +166,7 @@ envsubst_ufw() {
     log_info "Using ufw-docker: $UFW_DOCKER_BIN"
 
     # --- Function to inject rules into UFW config files ---
-    local inject_rules_to_ufw_file() {
+    inject_rules_to_ufw_file() {
         local SOURCE_FILE="$1"
         local TARGET_FILE="$2"
         local ANCHOR_LINE="$3"

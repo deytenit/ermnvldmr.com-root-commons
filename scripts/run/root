@@ -81,7 +81,7 @@ if [ "$ACTION" == "--help" ] || [ -z "$ACTION" ]; then
     echo "Available Actions:"
     
     echo "--- Local Actions ---"
-    local has_local=false
+    has_local=false
     if [ -d "$LOCAL_ROOT/scripts/actions" ]; then
         for script in $(find_scripts "$LOCAL_ROOT/scripts/actions"); do
             parse_metadata "$script" "$LOCAL_ROOT/scripts/actions"
@@ -94,7 +94,7 @@ if [ "$ACTION" == "--help" ] || [ -z "$ACTION" ]; then
 
     echo ""
     echo "--- Shared Actions ---"
-    local has_shared=false
+    has_shared=false
     if [ -d "$SHARED_ROOT/scripts/actions" ]; then
         for script in $(find_scripts "$SHARED_ROOT/scripts/actions"); do
             parse_metadata "$script" "$SHARED_ROOT/scripts/actions"
