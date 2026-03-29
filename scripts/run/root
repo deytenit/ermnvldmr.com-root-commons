@@ -39,11 +39,10 @@ parse_metadata() {
     local rel_path="${script_path#$base_dir/}"
     local script_name="$rel_path"
     
-    # We need to run the script in a subshell just to get its metadata function
-    local metadata=$(bash -c "source '$script_path' >/dev/null 2>&1; type action_metadata >/dev/null 2>&1 && action_metadata" 2>/dev/null)
+    # Extract metadata safely without executing the script
+    local desc=$(grep -E '^[[:space:]]*description:[[:space:]]*"' "$script_path" | head -n 1 | sed -E 's/^[[:space:]]*description:[[:space:]]*"(.*)"/\1/')
     
-    if [ -n "$metadata" ]; then
-        local desc=$(echo "$metadata" | grep -E '^description:' | sed -E 's/^description:[[:space:]]*"(.*)"/\1/')
+    if [ -n "$desc" ]; then
         printf "  %-30s %s\n" "$script_name" "$desc"
     else
         printf "  %-30s (No description available)\n" "$script_name"
