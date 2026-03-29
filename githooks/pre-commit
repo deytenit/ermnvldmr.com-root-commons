@@ -1,2 +1,2 @@
 #!/bin/bash
-./.operator/scripts/ops/lint-docker-compose --hook || { echo "[pre-commit] Aborting: .operator/scripts/ops/lint-docker-compose failed."; exit 1; }
+root utils lint-docker-compose --hook || { echo "[pre-commit] Aborting: root utils lint-docker-compose failed."; exit 1; }
