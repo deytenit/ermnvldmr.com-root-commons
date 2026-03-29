@@ -22,6 +22,9 @@ TELEGRAM_BOT_URL="${2:-}"
 require_arg "NODE" "$NODE" "Usage: $0 <NODE> <TELEGRAM_BOT_URL>"
 require_arg "TELEGRAM_BOT_URL" "$TELEGRAM_BOT_URL" "Usage: $0 <NODE> <TELEGRAM_BOT_URL>"
 
+export NODE
+setup_node_host_environment
+
 # --- Initialize ---
 navigate_to_repo_root # sets REPO_ROOT and cds into it
 

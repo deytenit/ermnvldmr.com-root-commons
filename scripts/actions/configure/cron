@@ -14,6 +14,7 @@ if [[ -z "$NODE" ]]; then
     exit 1
 fi
 export NODE
+setup_node_host_environment
 
 NODE_DIR="$REPO_ROOT/$NODE"
 CONFIG_DIR="$NODE_DIR/.operator/configs/cron"

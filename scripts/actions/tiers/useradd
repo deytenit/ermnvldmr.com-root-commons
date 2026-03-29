@@ -36,6 +36,9 @@ NODE="${1:-}"
 
 require_arg "NODE" "$NODE" "Usage: $0 <node>"
 
+export NODE
+setup_node_host_environment
+
 # --- Require root ---
 if [[ $EUID -ne 0 ]]; then
     echo "ERROR: must be run as root" >&2

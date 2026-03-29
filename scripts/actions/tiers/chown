@@ -36,6 +36,9 @@ require_arg "TIER1_PATH" "$TIER1_PATH" "Usage: $0 <node> <tier1_path> <tier2_pat
 require_arg "TIER2_PATH" "$TIER2_PATH" "Usage: $0 <node> <tier1_path> <tier2_path> <tier3_path>"
 require_arg "TIER3_PATH" "$TIER3_PATH" "Usage: $0 <node> <tier1_path> <tier2_path> <tier3_path>"
 
+export NODE
+setup_node_host_environment
+
 # --- Convert to absolute paths ---
 TIER_PATHS=("$(realpath "$TIER1_PATH")" "$(realpath "$TIER2_PATH")" "$(realpath "$TIER3_PATH")")
 SHARED_GROUP="noroot-shared"

@@ -44,6 +44,9 @@ if [[ -z "$NODE" || -z "$ACTION" ]]; then
     exit 1
 fi
 
+export NODE
+setup_node_host_environment
+
 # --- Validation ---
 NODE_DIR="$REPO_ROOT/$NODE"
 if [[ ! -d "$NODE_DIR" ]]; then

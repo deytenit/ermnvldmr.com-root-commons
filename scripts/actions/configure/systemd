@@ -14,6 +14,7 @@ if [[ -z "$NODE" ]]; then
 fi
 export NODE
 export REPO_ROOT
+setup_node_host_environment
 
 NODE_DIR="$REPO_ROOT/$NODE"
 CONFIG_DIR="$NODE_DIR/.operator/configs/systemd"
