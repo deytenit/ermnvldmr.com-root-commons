@@ -97,6 +97,14 @@ if ! git rebase origin/trunk; then
 fi
 log_info "Rebase successful."
 
+# Update submodules to match the rebased state
+log_info "Updating submodules (init + recursive)..."
+if ! git submodule update --init --recursive; then
+    log_error "Failed to update submodules after rebase. Manual intervention may be required."
+    exit 1
+fi
+log_info "Submodules updated successfully."
+
 # Push the changes to the remote repository
 log_info "Pushing changes for branch '$BRANCH_NAME' to origin (force-with-lease)..."
 if git push --force-with-lease origin "$BRANCH_NAME"; then
