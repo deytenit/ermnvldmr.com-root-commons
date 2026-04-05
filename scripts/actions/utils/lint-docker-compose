@@ -2,21 +2,16 @@
 #
 # lint-docker-compose: Lint Docker Compose files, with optional pre-commit hook support.
 # Usage:
-#   root utils/lint-docker-compose <node> --hook   # Only fix & stage docker-compose*.yml files that are currently staged
-#   root utils/lint-docker-compose <node>          # Lint (and fix) all docker-compose*.yml files in the repo
+#   root utils/lint-docker-compose --hook   # Only fix & stage docker-compose*.yml files that are currently staged
+#   root utils/lint-docker-compose          # Lint (and fix) all docker-compose*.yml files in the repo
 
 action_metadata() {
   cat <<EOF
 description: "Lint Docker Compose files, with optional pre-commit hook support."
 args:
-  - node: "The node name"
   - hook: "Optional flag '--hook' to only process staged files"
 EOF
 }
-
-# --- Initialize ---
-root_require_node "${1:-}"
-shift
 
 # --- Script-specific settings ---
 SCRIPT_NAME="lint-docker-compose"
@@ -25,7 +20,7 @@ SCRIPT_NAME="lint-docker-compose"
 HOOK_MODE=0
 if [[ "${1:-}" == "--hook" ]]; then
     HOOK_MODE=1
-    root_log_info "Hook mode enabled for node $ROOT_NODE: only processing staged docker-compose files."
+    root_log_info "Hook mode enabled: only processing staged docker-compose files."
 fi
 
 # --- Ensure docker is available ---
@@ -41,7 +36,8 @@ DOCKER_TARGETS=()
 
 if [ $HOOK_MODE -eq 1 ]; then
     root_log_info "Identifying staged docker-compose files..."
-    TARGET_FILES_STRING=$(git diff --cached --name-only --diff-filter=ACM -- '*.docker-compose.yml' '*.docker-compose.yaml' 'docker-compose*.yml' 'docker-compose*.yaml' || true)
+    # Always run git commands relative to ROOT_CONFIGS
+    TARGET_FILES_STRING=$(git -C "$ROOT_CONFIGS" diff --cached --name-only --diff-filter=ACM -- '*.docker-compose.yml' '*.docker-compose.yaml' 'docker-compose*.yml' 'docker-compose*.yaml' || true)
     if [ -z "$TARGET_FILES_STRING" ]; then
         root_log_info "No staged docker-compose files to lint. Exiting."
         exit 0
@@ -74,7 +70,8 @@ fi
 # --- In hook mode, re-stage only the fixed files ---
 if [ $HOOK_MODE -eq 1 ] && [ -n "$TARGET_FILES_STRING" ]; then
     root_log_info "Hook mode: Re-staging fixed files..."
-    echo "$TARGET_FILES_STRING" | xargs git add
+    # Use git -C to ensure we are operating on the correct repo
+    echo "$TARGET_FILES_STRING" | xargs -I {} git -C "$ROOT_CONFIGS" add {}
     root_log_info "Fixed files have been re-staged."
 fi
 
