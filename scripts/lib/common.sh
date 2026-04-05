@@ -48,19 +48,28 @@ navigate_to_repo_root() {
         NODE="$1"
     fi
 
-    local calling_script_path
-    # BASH_SOURCE[1] should be the script that called this function (i.e., the main script).
-    calling_script_path="${BASH_SOURCE[1]}"
-    if [[ -z "$calling_script_path" ]]; then
-        # Fallback if BASH_SOURCE[1] is not available (e.g. direct execution for testing common.sh itself)
-        calling_script_path="${BASH_SOURCE[0]}"
+    # If REPO_ROOT is already set and we are in a "warm" environment, trust it.
+    if [[ "${ROOT_WARM:-}" != "true" ]] || [[ -z "${REPO_ROOT:-}" ]]; then
+        local calling_script_path
+        # BASH_SOURCE[1] should be the script that called this function (i.e., the main script).
+        calling_script_path="${BASH_SOURCE[1]}"
+        if [[ -z "$calling_script_path" ]]; then
+            # Fallback if BASH_SOURCE[1] is not available (e.g. direct execution for testing common.sh itself)
+            calling_script_path="${BASH_SOURCE[0]}"
+        fi
+
+        # Try to get repo root based on the calling script's directory
+        REPO_ROOT="$(git -C "$(dirname "$calling_script_path")" rev-parse --show-toplevel 2>/dev/null)" || {
+            log_error "Failed to find repository root from $(dirname "$calling_script_path"). Ensure you are in a git repository."
+            exit 1
+        }
+
+        # If the found root is the shared submodule, the true REPO_ROOT is two levels up
+        if [[ "$REPO_ROOT" == */.operator/shared ]]; then
+            REPO_ROOT="$(cd "$REPO_ROOT/../.." >/dev/null 2>&1 && pwd)"
+        fi
     fi
 
-    # Try to get repo root based on the calling script's directory
-    REPO_ROOT="$(git -C "$(dirname "$calling_script_path")" rev-parse --show-toplevel 2>/dev/null)" || {
-        log_error "Failed to find repository root from $(dirname "$calling_script_path"). Ensure you are in a git repository."
-        exit 1
-    }
     cd "$REPO_ROOT" || {
         log_error "Failed to cd into repository root: $REPO_ROOT"
         exit 1
