@@ -22,7 +22,10 @@ export ROOT_ACTIONS_SHARED="$ROOT_SHARED/scripts/actions"
 export ROOT_ACTIONS_LOCAL="$ROOT_LOCAL/scripts/actions"
 
 # 2. Warming Environment
-if [[ "${ROOT_WARM:-}" != "true" ]]; then
+# We check if a core library function is already defined.
+# This ensures that even in nested calls (where environment variables might be 
+# inherited but shell functions are not), the libraries are sourced correctly.
+if ! declare -f root_log_info >/dev/null; then
     for lib_dir in "$ROOT_SHARED/scripts/lib" "$ROOT_LOCAL/scripts/lib"; do
         if [[ -d "$lib_dir" ]]; then
             for lib in "$lib_dir"/*.sh; do
@@ -30,7 +33,6 @@ if [[ "${ROOT_WARM:-}" != "true" ]]; then
             done
         fi
     done
-    export ROOT_WARM="true"
 fi
 
 # 3. Help System (simplified for now)

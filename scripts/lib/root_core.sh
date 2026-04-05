@@ -104,11 +104,14 @@ root_core_setup_error_trap() {
     local bot_url="${2:-}"
     local node="${3:-${ROOT_NODE:-global}}"
 
-    trap '
-        EXIT_CODE=$?;
-        root_log_error "Error occurred in $ROOT_ACTION_PATH at line $LINENO (exit code: $EXIT_CODE)";
+    _root_trap_handler() {
+        local exit_code=$1
+        local line_no=$2
+        root_log_error "Error occurred in $ROOT_ACTION_PATH at line $line_no (exit code: $exit_code)"
         if [[ -n "$bot_url" ]]; then
-            root_core_telegram_error "$title" "$bot_url" "Critical error occurred at line $LINENO (exit code: $EXIT_CODE)" "$node";
+            root_core_telegram_error "$title" "$bot_url" "Critical error occurred at line $line_no (exit code: $exit_code)" "$node"
         fi
-    ' ERR
+    }
+
+    trap '_root_trap_handler $? $LINENO' ERR
 }
