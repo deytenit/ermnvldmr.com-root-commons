@@ -15,48 +15,44 @@ EOF
 
 SCRIPT_NAME="restic-backup"
 
-# --- Argument Parsing and Validation ---
-NODE="${1:-}"
-TELEGRAM_BOT_URL="${2:-}"
+root_require_node "${1:-}"
+shift
 
-require_arg "NODE" "$NODE" "Usage: $0 <NODE> <TELEGRAM_BOT_URL>"
-require_arg "TELEGRAM_BOT_URL" "$TELEGRAM_BOT_URL" "Usage: $0 <NODE> <TELEGRAM_BOT_URL>"
+TELEGRAM_BOT_URL="${1:-}"
 
-export NODE
-setup_node_host_environment
-
-# --- Initialize ---
-navigate_to_repo_root # sets REPO_ROOT and cds into it
+if [[ -z "$TELEGRAM_BOT_URL" ]]; then
+    root_log_error "Usage: $0 <NODE> <TELEGRAM_BOT_URL>"
+    exit 64
+fi
 
 # --- Setup Error Handling ---
 TELEGRAM_TITLE_PREFIX="Restic Host Backup"
-setup_error_trap "$TELEGRAM_TITLE_PREFIX" "$TELEGRAM_BOT_URL" "$NODE"
+root_core_setup_error_trap "$TELEGRAM_TITLE_PREFIX" "$TELEGRAM_BOT_URL" "$ROOT_NODE"
 
-log_info "Starting restic backup for node: $NODE"
+root_log_info "Starting restic backup for node: $ROOT_NODE"
 
 # --- Ensure that the NODE directory and compose file exist ---
-NODE_DIR_PATH="$REPO_ROOT/$NODE"
-COMPOSE_FILE_PATH="$NODE_DIR_PATH/docker-compose.yml"
+COMPOSE_FILE_PATH="$ROOT_NODE_DIR/docker-compose.yml"
 
-RESTIC_TAG="com-ermnvldmr-root-$NODE"
+RESTIC_TAG="com-ermnvldmr-root-$ROOT_NODE"
 
-if [ ! -d "$NODE_DIR_PATH" ]; then
-    log_error "Node directory '$NODE_DIR_PATH' does not exist. Cannot run restic backup."
+if [ ! -d "$ROOT_NODE_DIR" ]; then
+    root_log_error "Node directory '$ROOT_NODE_DIR' does not exist. Cannot run restic backup."
     exit 1
 fi
-log_info "Node directory '$NODE_DIR_PATH' found."
+root_log_info "Node directory '$ROOT_NODE_DIR' found."
 
 if [ ! -f "$COMPOSE_FILE_PATH" ]; then
-    log_error "Docker Compose file '$COMPOSE_FILE_PATH' not found. Cannot run restic backup."
+    root_log_error "Docker Compose file '$COMPOSE_FILE_PATH' not found. Cannot run restic backup."
     exit 1
 fi
-log_info "Compose file '$COMPOSE_FILE_PATH' found."
+root_log_info "Compose file '$COMPOSE_FILE_PATH' found."
 
 # --- Helper to run restic inside compose ---
 run_restic() {
     local cmd="$*"
-    log_info "Running restic: $cmd"
-    if docker compose -f "$COMPOSE_FILE_PATH" run --rm restic $cmd; then
+    root_log_info "Running restic: $cmd"
+    if (cd "$ROOT_NODE_DIR" && docker compose run --rm restic $cmd); then
         return 0
     else
         return 1
@@ -64,43 +60,43 @@ run_restic() {
 }
 
 # --- Ensure restic repo is initialized (do this only once) ---
-log_info "Checking restic repository availability..."
+root_log_info "Checking restic repository availability..."
 if run_restic snapshots >/dev/null 2>&1; then
-    log_info "Restic repository appears initialized and reachable."
+    root_log_info "Restic repository appears initialized and reachable."
 else
-    log_info "Restic repository not initialized or unreachable; attempting 'restic init'..."
+    root_log_info "Restic repository not initialized or unreachable; attempting 'restic init'..."
     if run_restic init; then
-        log_info "Restic repository initialized."
+        root_log_info "Restic repository initialized."
     else
-        log_error "Failed to initialize restic repository."
-        telegram_error "$TELEGRAM_TITLE_PREFIX" "$TELEGRAM_BOT_URL" "restic init failed" "$NODE"
+        root_log_error "Failed to initialize restic repository."
+        root_core_telegram_error "$TELEGRAM_TITLE_PREFIX" "$TELEGRAM_BOT_URL" "restic init failed" "$ROOT_NODE"
         exit 1
     fi
 fi
 
 # --- Run the backup (only the mounted tier data) ---
-log_info "Starting backup of @tier1 and @tier2 (read-only mounts in compose) ..."
-if run_restic backup /data/@tier1 /data/@tier2 --host "$NODE" --tag "$RESTIC_TAG" --compression auto; then
-    log_info "Backup command completed successfully."
+root_log_info "Starting backup of $ROOT_TIER1 and $ROOT_TIER2 (read-only mounts in compose) ..."
+if run_restic backup /data/@tier1 /data/@tier2 --host "$ROOT_NODE" --tag "$RESTIC_TAG" --compression auto; then
+    root_log_info "Backup command completed successfully."
 else
-    log_error "restic backup failed."
-    telegram_error "$TELEGRAM_TITLE_PREFIX" "$TELEGRAM_BOT_URL" "restic backup failed" "$NODE"
+    root_log_error "restic backup failed."
+    root_core_telegram_error "$TELEGRAM_TITLE_PREFIX" "$TELEGRAM_BOT_URL" "restic backup failed" "$ROOT_NODE"
     exit 1
 fi
 
 # --- Run retention policy (forget + prune). Tune keep values as you like. ---
 # Example retention policy: keep daily 7, weekly 4, monthly 12
-log_info "Applying retention policy (forget + prune)..."
+root_log_info "Applying retention policy (forget + prune)..."
 if run_restic forget --prune --keep-daily 7 --keep-weekly 4 --keep-monthly 12; then
-    log_info "Retention policy applied successfully."
+    root_log_info "Retention policy applied successfully."
 else
-    log_error "restic forget/prune failed."
-    telegram_error "$TELEGRAM_TITLE_PREFIX" "$TELEGRAM_BOT_URL" "restic forget/prune failed" "$NODE"
+    root_log_error "restic forget/prune failed."
+    root_core_telegram_error "$TELEGRAM_TITLE_PREFIX" "$TELEGRAM_BOT_URL" "restic forget/prune failed" "$ROOT_NODE"
     exit 1
 fi
 
 # --- Success notification ---
-log_success "Restic backup completed successfully for node: $NODE"
-telegram_success "$TELEGRAM_TITLE_PREFIX" "$TELEGRAM_BOT_URL" "Restic backup + retention succeeded for node: $NODE" "$NODE"
+root_log_success "Restic backup completed successfully for node: $ROOT_NODE"
+root_core_telegram_success "$TELEGRAM_TITLE_PREFIX" "$TELEGRAM_BOT_URL" "Restic backup + retention succeeded for node: $ROOT_NODE" "$ROOT_NODE"
 exit 0
 

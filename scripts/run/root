@@ -1,153 +1,55 @@
 #!/usr/bin/env bash
+set -euo pipefail
 
-# Source - https://stackoverflow.com/a/246128
-# Posted by dogbane, modified by community. See post 'Timeline' for change history
-# Retrieved 2026-04-05, License - CC BY-SA 4.0
-get_script_dir()
-{
-    local SOURCE_PATH="${BASH_SOURCE[0]}"
-    local SYMLINK_DIR
-    local SCRIPT_DIR
-    # Resolve symlinks recursively
-    while [ -L "$SOURCE_PATH" ]; do
-        # Get symlink directory
-        SYMLINK_DIR="$( cd -P "$( dirname "$SOURCE_PATH" )" >/dev/null 2>&1 && pwd )"
-        # Resolve symlink target (relative or absolute)
-        SOURCE_PATH="$(readlink "$SOURCE_PATH")"
-        # Check if candidate path is relative or absolute
-        if [[ $SOURCE_PATH != /* ]]; then
-            # Candidate path is relative, resolve to full path
-            SOURCE_PATH=$SYMLINK_DIR/$SOURCE_PATH
+# 1. Path Resolution
+SOURCE_PATH="${BASH_SOURCE[0]}"
+while [ -L "$SOURCE_PATH" ]; do
+    DIR="$(cd -P "$(dirname "$SOURCE_PATH")" >/dev/null 2>&1 && pwd)"
+    SOURCE_PATH="$(readlink "$SOURCE_PATH")"
+    [[ $SOURCE_PATH != /* ]] && SOURCE_PATH="$DIR/$SOURCE_PATH"
+done
+ROOT_SHARED="$(cd -P "$(dirname "$SOURCE_PATH")/../.." >/dev/null 2>&1 && pwd)"
+
+if [[ "$ROOT_SHARED" == */.operator/shared ]]; then
+    ROOT_CONFIGS="$(cd "$ROOT_SHARED/../.." >/dev/null 2>&1 && pwd)"
+else
+    ROOT_CONFIGS="$ROOT_SHARED"
+fi
+
+export ROOT_SHARED ROOT_CONFIGS
+export ROOT_LOCAL="$ROOT_CONFIGS/.operator/local"
+export ROOT_ACTIONS_SHARED="$ROOT_SHARED/scripts/actions"
+export ROOT_ACTIONS_LOCAL="$ROOT_LOCAL/scripts/actions"
+
+# 2. Warming Environment
+if [[ "${ROOT_WARM:-}" != "true" ]]; then
+    for lib_dir in "$ROOT_SHARED/scripts/lib" "$ROOT_LOCAL/scripts/lib"; do
+        if [[ -d "$lib_dir" ]]; then
+            for lib in "$lib_dir"/*.sh; do
+                [[ -f "$lib" ]] && source "$lib"
+            done
         fi
     done
-    # Get final script directory path from fully resolved source path
-    SCRIPT_DIR="$(cd -P "$( dirname "$SOURCE_PATH" )" >/dev/null 2>&1 && pwd)"
-    echo "$SCRIPT_DIR"
-}
-
-SCRIPT_DIR="$(get_script_dir)"
-
-# Determine SHARED_ROOT relative to the script location (scripts/run/root -> root-commons root)
-SHARED_ROOT="$(cd "$SCRIPT_DIR/../.." >/dev/null 2>&1 && pwd)"
-
-# If deployed as a shared operator commons, the structure is .operator/shared
-if [[ "$SHARED_ROOT" == */.operator/shared ]]; then
-    REPO_ROOT="$(cd "$SHARED_ROOT/../.." >/dev/null 2>&1 && pwd)"
-else
-    # Fallback: assume running standalone in the commons repository
-    REPO_ROOT="$SHARED_ROOT"
+    export ROOT_WARM="true"
 fi
 
-export REPO_ROOT
-LOCAL_ROOT="$REPO_ROOT/.operator/local"
-
-# Implement "warm" environment check
-if [ "${ROOT_WARM:-}" != "true" ]; then
-    # Source shared libraries
-    if [ -d "$SHARED_ROOT/scripts/lib" ]; then
-        for lib in "$SHARED_ROOT"/scripts/lib/*.sh; do
-            if [ -f "$lib" ]; then
-                source "$lib"
-            fi
-        done
-    fi
-
-    # Source local libraries if they exist
-    if [ -d "$LOCAL_ROOT/scripts/lib" ]; then
-        for lib in "$LOCAL_ROOT"/scripts/lib/*.sh; do
-            if [ -f "$lib" ]; then
-                source "$lib"
-            fi
-        done
-    fi
-
-    ROOT_WARM="true"
-fi
-
-# Function to extract and parse metadata
-parse_metadata() {
-    local script_path="$1"
-    local base_dir="$2"
-    
-    # Calculate relative path to use as command name (e.g. configure/ufw)
-    local rel_path="${script_path#$base_dir/}"
-    local script_name="$rel_path"
-    
-    # Extract metadata safely without executing the script
-    local desc=$(grep -E '^[[:space:]]*description:[[:space:]]*"' "$script_path" | head -n 1 | sed -E 's/^[[:space:]]*description:[[:space:]]*"(.*)"/\1/')
-    
-    if [ -n "$desc" ]; then
-        printf "  %-30s %s\n" "$script_name" "$desc"
-    else
-        printf "  %-30s (No description available)\n" "$script_name"
-    fi
-}
-
-# Function to recursively find scripts
-find_scripts() {
-    local dir="$1"
-    if [ -d "$dir" ]; then
-        find "$dir" -type f -executable -o -type f -name "*" ! -name "*.*" | sort
-    fi
-}
-
-ACTION="${1:-}"
-
-# Action parsing to support subcommands: e.g. root configure ufw
-# We allow passing 'configure ufw' or 'configure/ufw'
-if [ $# -ge 2 ]; then
-    POTENTIAL_ACTION="$1/$2"
-    if [ -f "$LOCAL_ROOT/scripts/actions/$POTENTIAL_ACTION" ] || [ -f "$SHARED_ROOT/scripts/actions/$POTENTIAL_ACTION" ]; then
-        ACTION="$POTENTIAL_ACTION"
-        shift 2
-    else
-        shift
-    fi
-else
-    shift || true
-fi
-
-# Help System
-if [ "$ACTION" == "--help" ] || [ -z "$ACTION" ]; then
-    echo "Usage: root <action|group action> [args...]"
-    echo ""
-    echo "Available Actions:"
-    
-    echo "--- Local Actions ---"
-    has_local=false
-    if [ -d "$LOCAL_ROOT/scripts/actions" ]; then
-        for script in $(find_scripts "$LOCAL_ROOT/scripts/actions"); do
-            parse_metadata "$script" "$LOCAL_ROOT/scripts/actions"
-            has_local=true
-        done
-    fi
-    if [ "$has_local" = false ]; then
-        echo "  (None)"
-    fi
-
-    echo ""
-    echo "--- Shared Actions ---"
-    has_shared=false
-    if [ -d "$SHARED_ROOT/scripts/actions" ]; then
-        for script in $(find_scripts "$SHARED_ROOT/scripts/actions"); do
-            parse_metadata "$script" "$SHARED_ROOT/scripts/actions"
-            has_shared=true
-        done
-    fi
-    if [ "$has_shared" = false ]; then
-        echo "  (None)"
-    fi
+# 3. Help System (simplified for now)
+ACTION_PATH="${1:-}"
+if [[ -z "$ACTION_PATH" || "$ACTION_PATH" == "--help" ]]; then
+    echo "Usage: root <action_path> [args...]"
+    # TODO: Add dynamic help listing
     exit 0
 fi
+shift
 
-# Command Dispatcher
-if [ -f "$LOCAL_ROOT/scripts/actions/$ACTION" ]; then
-    # Execute local action
-    source "$LOCAL_ROOT/scripts/actions/$ACTION" "$@"
-elif [ -f "$SHARED_ROOT/scripts/actions/$ACTION" ]; then
-    # Execute shared action
-    source "$SHARED_ROOT/scripts/actions/$ACTION" "$@"
+export ROOT_ACTION_PATH="$ACTION_PATH"
+
+# 4. Dispatching
+if [[ -f "$ROOT_ACTIONS_LOCAL/$ACTION_PATH" ]]; then
+    source "$ROOT_ACTIONS_LOCAL/$ACTION_PATH" "$@"
+elif [[ -f "$ROOT_ACTIONS_SHARED/$ACTION_PATH" ]]; then
+    source "$ROOT_ACTIONS_SHARED/$ACTION_PATH" "$@"
 else
-    echo "Error: Unknown action '$ACTION'" >&2
+    root_log_error "Unknown action: $ACTION_PATH"
     exit 1
 fi

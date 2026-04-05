@@ -2,79 +2,81 @@
 #
 # lint-docker-compose: Lint Docker Compose files, with optional pre-commit hook support.
 # Usage:
-#   ./lint-docker-compose --hook   # Only fix & stage docker-compose*.yml files that are currently staged
-#   ./lint-docker-compose          # Lint (and fix) all docker-compose*.yml files in the repo
+#   root utils/lint-docker-compose <node> --hook   # Only fix & stage docker-compose*.yml files that are currently staged
+#   root utils/lint-docker-compose <node>          # Lint (and fix) all docker-compose*.yml files in the repo
 
 action_metadata() {
   cat <<EOF
 description: "Lint Docker Compose files, with optional pre-commit hook support."
 args:
+  - node: "The node name"
   - hook: "Optional flag '--hook' to only process staged files"
 EOF
 }
 
+# --- Initialize ---
+root_require_node "${1:-}"
+shift
+
 # --- Script-specific settings ---
 SCRIPT_NAME="lint-docker-compose"
-
-# --- Initialize ---
-navigate_to_repo_root # REPO_ROOT is set here
 
 # --- Detect hook mode ---
 HOOK_MODE=0
 if [[ "${1:-}" == "--hook" ]]; then
     HOOK_MODE=1
-    log_info "Hook mode enabled: only processing staged docker-compose files."
+    root_log_info "Hook mode enabled for node $ROOT_NODE: only processing staged docker-compose files."
 fi
 
 # --- Ensure docker is available ---
 if ! command -v docker >/dev/null 2>&1; then
-    log_error "docker is not installed or not in PATH."
+    root_log_error "docker is not installed or not in PATH."
     exit 1
 fi
-log_info "docker command found."
+root_log_info "docker command found."
 
 # --- Prepare list of target files ---
 TARGET_FILES_STRING=""
 DOCKER_TARGETS=()
 
 if [ $HOOK_MODE -eq 1 ]; then
-    log_info "Identifying staged docker-compose files..."
+    root_log_info "Identifying staged docker-compose files..."
     TARGET_FILES_STRING=$(git diff --cached --name-only --diff-filter=ACM -- '*.docker-compose.yml' '*.docker-compose.yaml' 'docker-compose*.yml' 'docker-compose*.yaml' || true)
     if [ -z "$TARGET_FILES_STRING" ]; then
-        log_info "No staged docker-compose files to lint. Exiting."
+        root_log_info "No staged docker-compose files to lint. Exiting."
         exit 0
     fi
-    log_info "Staged docker-compose files to be processed:"
+    root_log_info "Staged docker-compose files to be processed:"
     echo "$TARGET_FILES_STRING"
     # Convert repo-root-relative paths to container-relative paths (/workdir/...)
     while IFS= read -r f; do
         DOCKER_TARGETS+=("/workdir/${f}")
     done < <(echo "$TARGET_FILES_STRING")
 else
-    log_info "Standard mode: Linting all docker-compose files in the project ($REPO_ROOT)..."
+    root_log_info "Standard mode: Linting all docker-compose files in the project ($ROOT_CONFIGS)..."
     DOCKER_TARGETS=(".")
 fi
 
 # --- Run dclint via Docker (node:alpine, no local npm/node required) ---
-log_info "Running dclint with --fix option (via Docker)..."
+root_log_info "Running dclint with --fix option (via Docker)..."
 if docker run --rm \
-    -v "${REPO_ROOT}:/workdir" \
+    -v "${ROOT_CONFIGS}:/workdir" \
     -w /workdir \
     node:lts-alpine \
     npx --yes dclint -e '@tier1' '@tier2' '@tier3' '.env' -r --fix "${DOCKER_TARGETS[@]}"; then
-    log_success "dclint completed successfully."
+    root_log_success "dclint completed successfully."
 else
     DCLINT_STATUS=$?
-    log_error "dclint encountered issues (exit code: $DCLINT_STATUS). Please review output and resolve manually."
+    root_log_error "dclint encountered issues (exit code: $DCLINT_STATUS). Please review output and resolve manually."
     exit $DCLINT_STATUS
 fi
 
 # --- In hook mode, re-stage only the fixed files ---
 if [ $HOOK_MODE -eq 1 ] && [ -n "$TARGET_FILES_STRING" ]; then
-    log_info "Hook mode: Re-staging fixed files..."
+    root_log_info "Hook mode: Re-staging fixed files..."
     echo "$TARGET_FILES_STRING" | xargs git add
-    log_info "Fixed files have been re-staged."
+    root_log_info "Fixed files have been re-staged."
 fi
 
-log_success "Docker-compose linting and fixing process finished."
+root_log_success "Docker-compose linting and fixing process finished."
 exit 0

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# extract-traefik-certs <acme_json_path> <dest_dir>
+# extract-traefik-certs <node> <acme_json_path> <dest_dir>
 # Extracts Traefik v3 acme.json certificates into fullchain.pem and privkey.pem
 # uses ldez/traefik-certs-dumper via Docker
 
@@ -11,23 +11,28 @@ action_metadata() {
   cat <<EOF
 description: "Extracts Traefik v3 acme.json certificates into fullchain.pem and privkey.pem"
 args:
+  - NODE: "The node name"
   - SOURCE_ACME: "path to acme.json"
   - DEST_DIR: "destination directory"
 EOF
 }
 
-SCRIPT_NAME="extract-traefik-certs"
+# --- Initialize ---
+root_require_node "${1:-}"
+shift
 
 # --- Parse arguments ---
 SOURCE_ACME="${1:-}"
 DEST_DIR="${2:-}"
 
-require_arg "SOURCE_ACME" "$SOURCE_ACME" "Usage: $0 <path_to_acme.json> <destination_directory>"
-require_arg "DEST_DIR" "$DEST_DIR" "Usage: $0 <path_to_acme.json> <destination_directory>"
+if [[ -z "$SOURCE_ACME" || -z "$DEST_DIR" ]]; then
+    root_log_error "Usage: root utils/extract-traefik-certs <node> <path_to_acme.json> <destination_directory>"
+    exit 64
+fi
 
 # --- Validation ---
 if [[ ! -f "$SOURCE_ACME" ]]; then
-    log_error "Source file not found: $SOURCE_ACME"
+    root_log_error "Source file not found: $SOURCE_ACME"
     exit 1
 fi
 
@@ -39,9 +44,9 @@ SOURCE_FILE="$(basename "$ABS_SOURCE")"
 mkdir -p "$DEST_DIR"
 ABS_DEST="$(realpath "$DEST_DIR")"
 
-log_info "Extracting certificates..."
-log_info "  Source: $ABS_SOURCE"
-log_info "  Destination: $ABS_DEST"
+root_log_info "Extracting certificates for node $ROOT_NODE..."
+root_log_info "  Source: $ABS_SOURCE"
+root_log_info "  Destination: $ABS_DEST"
 
 # --- Execute Dumper via Docker ---
 # We mount the source directory and the destination directory
@@ -63,11 +68,11 @@ docker run --rm \
 # Docker creates files as root; we want them accessible but secure.
 # If you are running this as part of your noroot setup, 
 # you might want to chown these to your specific user.
-log_info "Setting secure permissions (600) on extracted keys..."
+root_log_info "Setting secure permissions (600) on extracted keys..."
 find "$ABS_DEST" -type f -name "*.pem" -exec chmod 600 {} +
 
-log_success "✅ Certificates extracted successfully!"
-log_info "Structure created at $DEST_DIR:"
-log_info "  └── [domain]/"
-log_info "      ├── fullchain.pem"
-log_info "      └── privkey.pem"
+root_log_success "✅ Certificates extracted successfully!"
+root_log_info "Structure created at $DEST_DIR:"
+root_log_info "  └── [domain]/"
+root_log_info "      ├── fullchain.pem"
+root_log_info "      └── privkey.pem"

@@ -28,28 +28,17 @@ args:
 EOF
 }
 
-SCRIPT_NAME="setup-noroot-users"
-
-navigate_to_repo_root
-
-NODE="${1:-}"
-
-require_arg "NODE" "$NODE" "Usage: $0 <node>"
-
-export NODE
-setup_node_host_environment
+# --- Initialize ---
+root_require_node "${1:-}"
+shift
 
 # --- Require root ---
 if [[ $EUID -ne 0 ]]; then
-    echo "ERROR: must be run as root" >&2
+    root_log_error "This script must be run as root (sudo)"
     exit 2
 fi
 
-NODE_PATH="$REPO_ROOT/$NODE"
-if [[ ! -d "$NODE_PATH" ]]; then
-    echo "ERROR: node path not found: $NODE_PATH" >&2
-    exit 3
-fi
+NODE_PATH="$ROOT_NODE_DIR"
 
 # --- Ensure noroot-shared group exists ---
 SHARED_GROUP="noroot-shared"
@@ -57,13 +46,13 @@ SHARED_GID=""
 
 ensure_shared_group() {
     if getent group "$SHARED_GROUP" >/dev/null 2>&1; then
-        log_info "Shared group '$SHARED_GROUP' already exists"
+        root_log_info "Shared group '$SHARED_GROUP' already exists"
         SHARED_GID=$(getent group "$SHARED_GROUP" | cut -d: -f3)
     else
-        log_info "Creating shared group: $SHARED_GROUP"
+        root_log_info "Creating shared group: $SHARED_GROUP"
         groupadd -r "$SHARED_GROUP"
         SHARED_GID=$(getent group "$SHARED_GROUP" | cut -d: -f3)
-        log_success "Created shared group: $SHARED_GROUP (GID: $SHARED_GID)"
+        root_log_success "Created shared group: $SHARED_GROUP (GID: $SHARED_GID)"
     fi
 }
 
@@ -123,13 +112,13 @@ add_user_to_shared_group() {
     
     # Check if user is already in the group
     if groups "$username" 2>/dev/null | grep -q "\b$SHARED_GROUP\b"; then
-        log_info "User '$username' is already a member of '$SHARED_GROUP'"
+        root_log_info "User '$username' is already a member of '$SHARED_GROUP'"
         return 0
     fi
     
-    log_info "Adding user '$username' to shared group '$SHARED_GROUP'"
+    root_log_info "Adding user '$username' to shared group '$SHARED_GROUP'"
     usermod -aG "$SHARED_GROUP" "$username"
-    log_success "User '$username' added to '$SHARED_GROUP'"
+    root_log_success "User '$username' added to '$SHARED_GROUP'"
 }
 
 # Update (insert or replace) the auto-generated UID/GID block in a .env file.
@@ -142,7 +131,7 @@ update_env_file_with_uid_gid() {
 
     # Only operate if file exists (not broken symlink)
     if [[ ! -e "$env_path" ]]; then
-        log_info "Skipping .env update for (not exists): $env_path"
+        root_log_info "Skipping .env update for (not exists): $env_path"
         return 0
     fi
 
@@ -150,7 +139,7 @@ update_env_file_with_uid_gid() {
     local actual_file="$env_path"
     if [[ -L "$env_path" ]]; then
         actual_file="$(readlink -f "$env_path")"
-        log_info ".env is a symlink: $env_path -> $actual_file"
+        root_log_info ".env is a symlink: $env_path -> $actual_file"
     fi
 
     local start_marker="# START AUTO GENERATED SETUP-NOROOT-USERS"
@@ -194,7 +183,7 @@ update_env_file_with_uid_gid() {
     chmod "$orig_mode" "$tmp" || true
     mv -f "$tmp" "$actual_file"
 
-    log_success "Updated .env with UID/GID/SHARED_GID: $actual_file -> UID=$uid GID=$gid SHARED_GID=$shared_gid"
+    root_log_success "Updated .env with UID/GID/SHARED_GID: $actual_file -> UID=$uid GID=$gid SHARED_GID=$shared_gid"
 }
 
 # --- Main loop ----
@@ -233,11 +222,11 @@ while IFS= read -r project; do
     used_usernames["$candidate"]="$project_name"
 
     if create_system_user "$candidate" "$project_name"; then
-        log_success "Created system user: $candidate (for project: $project_name)"
+        root_log_success "Created system user: $candidate (for project: $project_name)"
         created_list+=("$candidate:$project_name")
         status="created"
     else
-        log_info "User already exists: $candidate (skipping create) -> project: $project_name"
+        root_log_info "User already exists: $candidate (skipping create) -> project: $project_name"
         status="exists"
     fi
 
@@ -260,9 +249,9 @@ while IFS= read -r project; do
         update_env_file_with_uid_gid "$project_env_path" "$uid" "$gid" "$SHARED_GID"
     else
         if [[ -e "$project_env_path" ]]; then
-            log_warn "Could not determine UID/GID/SHARED_GID for $candidate; skipping .env update for $project_env_path"
+            root_log_warn "Could not determine UID/GID/SHARED_GID for $candidate; skipping .env update for $project_env_path"
         else
-            log_info "No .env present for project: $project_name (path: $project_env_path)"
+            root_log_info "No .env present for project: $project_name (path: $project_env_path)"
         fi
     fi
 
@@ -270,7 +259,7 @@ done < <(discover_projects "$NODE_PATH")
 
 # --- Print final UID:GID listing for each touched username ---
 printf '\n'
-log_info "Final UID:GID for users processed:"
+root_log_info "Final UID:GID for users processed:"
 printf '%-32s %-10s %-15s %s\n' "USERNAME" "UID:GID" "SHARED_GID" "PROJECT (status)"
 for entry in "${touched_list[@]}"; do
     IFS=':' read -r uname proj status uid gid <<<"$entry"
@@ -282,11 +271,9 @@ for entry in "${touched_list[@]}"; do
 done
 
 printf '\n'
-log_info "Shared group: $SHARED_GROUP (GID: $SHARED_GID)"
+root_log_info "Shared group: $SHARED_GROUP (GID: $SHARED_GID)"
 if (( ${#created_list[@]} > 0 )); then
-    log_success "Created ${#created_list[@]} new system user(s)."
+    root_log_success "Created ${#created_list[@]} new system user(s)."
 else
-    log_info "No new system users were created."
+    root_log_info "No new system users were created."
 fi
-
-exit 0

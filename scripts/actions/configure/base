@@ -8,78 +8,70 @@ args:
 EOF
 }
 
-NODE="${1:-}"
-if [[ -z "$NODE" ]]; then
-    log_error "Usage: $0 <node>"
-    exit 1
-fi
-export NODE
-setup_node_host_environment
+# --- Script-specific settings ---
+SCRIPT_NAME="configure-base"
 
-log_info "Starting base system initialization for $NODE node..."
-ensure_debian_ubuntu
+root_require_node "${1:-}"
 
-log_info "Updating package lists..."
+root_log_info "Starting base system initialization..."
+root_validate_debian_ubuntu
+
+root_log_info "Updating package lists..."
 if sudo apt-get update -y; then
-    log_success "Package lists updated successfully."
+    root_log_success "Package lists updated successfully."
 else
-    log_error "Failed to update package lists."
+    root_log_error "Failed to update package lists."
     exit 1
 fi
 
-log_info "Installing essential system packages..."
+root_log_info "Installing essential system packages..."
 if sudo apt-get install -y curl wget git rsyslog; then
-    log_success "Essential packages installed."
+    root_log_success "Essential packages installed."
 else
-    log_error "Failed to install essential packages."
+    root_log_error "Failed to install essential packages."
     exit 1
 fi
 
-if ! systemctl is-active --quiet rsyslog; then
-    log_info "Starting rsyslog for traditional auth logging..."
-    sudo systemctl enable --now rsyslog
-else
-    log_info "rsyslog already running."
-fi
+root_init_ensure_service_running "rsyslog"
 
 if ! command -v ufw >/dev/null 2>&1; then
-    log_info "Installing UFW..."
+    root_log_info "Installing UFW..."
     sudo apt-get update -y
     sudo apt-get install -y ufw
-    log_success "UFW installed successfully."
+    root_log_success "UFW installed successfully."
 else
-    log_info "UFW already installed."
+    root_log_info "UFW already installed."
 fi
 
 UFW_DOCKER_BIN="$HOME/.local/bin/ufw-docker"
 if [[ ! -x "$UFW_DOCKER_BIN" ]]; then
-    log_info "Downloading ufw-docker helper..."
+    root_log_info "Downloading ufw-docker helper..."
     mkdir -p "$(dirname "$UFW_DOCKER_BIN")"
 
     download_url="https://github.com/chaifeng/ufw-docker/raw/master/ufw-docker"
     if command -v wget >/dev/null 2>&1; then
         if wget -O "$UFW_DOCKER_BIN" "$download_url"; then
-            log_success "ufw-docker downloaded successfully with wget."
+            root_log_success "ufw-docker downloaded successfully with wget."
         else
-            log_error "Failed to download ufw-docker with wget."
+            root_log_error "Failed to download ufw-docker with wget."
             exit 1
         fi
     elif command -v curl >/dev/null 2>&1; then
         if curl -L -o "$UFW_DOCKER_BIN" "$download_url"; then
-            log_success "ufw-docker downloaded successfully with curl."
+            root_log_success "ufw-docker downloaded successfully with curl."
         else
-            log_error "Failed to download ufw-docker with curl."
+            root_log_error "Failed to download ufw-docker with curl."
             exit 1
         fi
     else
-        log_error "Neither wget nor curl are available for downloading ufw-docker."
+        root_log_error "Neither wget nor curl are available for downloading ufw-docker."
         exit 1
     fi
 
     chmod +x "$UFW_DOCKER_BIN"
-    log_success "ufw-docker downloaded to $UFW_DOCKER_BIN."
+    root_log_success "ufw-docker downloaded to $UFW_DOCKER_BIN."
 else
-    log_info "ufw-docker already exists at $UFW_DOCKER_BIN."
+    root_log_info "ufw-docker already exists at $UFW_DOCKER_BIN."
 fi
 
-log_success "Base system initialization completed for $NODE node."
+root_log_success "Base system initialization completed."

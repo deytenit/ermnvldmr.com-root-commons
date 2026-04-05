@@ -20,24 +20,16 @@ args:
 EOF
 }
 
-SCRIPT_NAME="setup-tiers-chown"
+root_require_node "${1:-}"
+shift
 
 # --- Initialize ---
-navigate_to_repo_root
+# ROOT_CONFIGS is already available
 
-# --- Parse arguments ---
-NODE="${1:-}"
-TIER1_PATH="${2:-}"
-TIER2_PATH="${3:-}"
-TIER3_PATH="${4:-}"
-
-require_arg "NODE" "$NODE" "Usage: $0 <node> <tier1_path> <tier2_path> <tier3_path>"
-require_arg "TIER1_PATH" "$TIER1_PATH" "Usage: $0 <node> <tier1_path> <tier2_path> <tier3_path>"
-require_arg "TIER2_PATH" "$TIER2_PATH" "Usage: $0 <node> <tier1_path> <tier2_path> <tier3_path>"
-require_arg "TIER3_PATH" "$TIER3_PATH" "Usage: $0 <node> <tier1_path> <tier2_path> <tier3_path>"
-
-export NODE
-setup_node_host_environment
+# --- Parse arguments (optional overrides for tiers) ---
+TIER1_PATH="${1:-$ROOT_TIER1}"
+TIER2_PATH="${2:-$ROOT_TIER2}"
+TIER3_PATH="${3:-$ROOT_TIER3}"
 
 # --- Convert to absolute paths ---
 TIER_PATHS=("$(realpath "$TIER1_PATH")" "$(realpath "$TIER2_PATH")" "$(realpath "$TIER3_PATH")")
@@ -45,7 +37,7 @@ SHARED_GROUP="noroot-shared"
 
 # --- Require Root ---
 if [[ $EUID -ne 0 ]]; then
-    log_error "This script must be run with sudo/root privileges."
+    root_log_error "This script must be run with sudo/root privileges."
     exit 1
 fi
 
@@ -79,12 +71,12 @@ apply_permissions() {
     shared_gid=$(get_shared_gid)
     
     if [[ -z "$shared_gid" ]]; then
-        log_error "Shared group '$SHARED_GROUP' not found. Run setup-noroot-users first."
+        root_log_error "Shared group '$SHARED_GROUP' not found. Run setup-noroot-users first."
         exit 1
     fi
 
     # 1. Reset base tier directories and node-infra to root:root
-    log_info "Ensuring base structures are owned by root..."
+    root_log_info "Ensuring base structures are owned by root..."
     for tp in "${TIER_PATHS[@]}"; do
         chown root:root "$tp"
         [[ -d "$tp/shared" ]] && chown root:root "$tp/shared"
@@ -92,8 +84,7 @@ apply_permissions() {
     done
 
     # 2. Discover projects
-    local node_path="$REPO_ROOT/$NODE"
-    for entry in "$node_path"/*; do
+    for entry in "$ROOT_NODE_DIR"/*; do
         [[ ! -d "$entry" ]] && continue
         
         local project_name
@@ -104,7 +95,7 @@ apply_permissions() {
         local project_uid=""
         local project_gid=""
         local project_shared_gid=""
-        local project_env="$node_path/$project_name/.env"
+        local project_env="$ROOT_NODE_DIR/$project_name/.env"
         
         # Strictly extract UID/GID/SHARED_GID from .env (source of truth from setup-noroot-users)
         if [[ -f "$project_env" ]]; then
@@ -112,17 +103,17 @@ apply_permissions() {
             project_gid=$(grep -E "^GID=" "$project_env" | cut -d= -f2 || true)
             project_shared_gid=$(grep -E "^SHARED_GID=" "$project_env" | cut -d= -f2 || true)
         else
-            log_warn "Missing .env for project $project_name. Run setup-noroot-users first. Skipping."
+            root_log_warn "Missing .env for project $project_name. Run setup-noroot-users first. Skipping."
             continue
         fi
         
         # Determine effective ownership target
         if [[ -z "$project_uid" || -z "$project_gid" || -z "$project_shared_gid" ]]; then
-            log_warn "Incomplete UID/GID/SHARED_GID in $project_env. Run setup-noroot-users first. Skipping."
+            root_log_warn "Incomplete UID/GID/SHARED_GID in $project_env. Run setup-noroot-users first. Skipping."
             continue
         fi
 
-        log_info "Applying permissions for project: $project_name (UID=$project_uid, GID=$project_gid, SHARED_GID=$project_shared_gid)"
+        root_log_info "Applying permissions for project: $project_name (UID=$project_uid, GID=$project_gid, SHARED_GID=$project_shared_gid)"
 
         for tp in "${TIER_PATHS[@]}"; do
             local project_tier_dir="$tp/$project_name"
@@ -132,7 +123,7 @@ apply_permissions() {
             if [[ -d "$project_tier_dir" ]]; then
                 # We chown the directory and its contents using UIDs from .env
                 chown -R "$project_uid:$project_gid" "$project_tier_dir"
-                log_success "  Owned $project_tier_dir"
+                root_log_success "  Owned $project_tier_dir"
             fi
 
             # Requirement: {tier}/shared/{project} -> noroot-user:noroot-shared (sticky)
@@ -141,16 +132,16 @@ apply_permissions() {
                 chown -R "$project_uid:$project_shared_gid" "$project_shared_dir"
                 # Apply sticky bit so users can only delete their own files in shared context
                 chmod +t "$project_shared_dir"
-                log_success "  Owned $project_shared_dir (sticky bit set)"
+                root_log_success "  Owned $project_shared_dir (sticky bit set)"
             fi
         done
     done
 }
 
 main() {
-    log_info "Starting tier permissions enforcement for node: $NODE"
+    root_log_info "Starting tier permissions enforcement for node: $ROOT_NODE"
     apply_permissions
-    log_success "✅ Permissions applied successfully!"
+    root_log_success "✅ Permissions applied successfully!"
 }
 
 main "$@"

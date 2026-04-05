@@ -16,47 +16,51 @@ EOF
 # --- Script-specific settings ---
 SCRIPT_NAME="sync-remote"
 
-# --- Argument Parsing and Validation ---
-NODE="${1:-}"
-TELEGRAM_BOT_URL="${2:-}"
+root_require_node "${1:-}"
+shift
 
-require_arg "NODE" "$NODE" "Usage: $0 <NODE> <TELEGRAM_BOT_URL>"
-require_arg "TELEGRAM_BOT_URL" "$TELEGRAM_BOT_URL" "Usage: $0 <NODE> <TELEGRAM_BOT_URL>"
+TELEGRAM_BOT_URL="${1:-}"
 
-export NODE
-setup_node_host_environment
-
-# --- Initialize ---
-navigate_to_repo_root # REPO_ROOT is set here, and we cd to it
+if [[ -z "$TELEGRAM_BOT_URL" ]]; then
+    root_log_error "Usage: $0 <NODE> <TELEGRAM_BOT_URL>"
+    exit 64
+fi
 
 # --- Setup Error Handling ---
 TELEGRAM_TITLE_PREFIX="Annual Remote Sync"
-setup_error_trap "$TELEGRAM_TITLE_PREFIX" "$TELEGRAM_BOT_URL" "$NODE"
+root_core_setup_error_trap "$TELEGRAM_TITLE_PREFIX" "$TELEGRAM_BOT_URL" "$ROOT_NODE"
 
-log_info "Starting remote sync for node: $NODE"
+root_log_info "Starting remote sync for node: $ROOT_NODE"
 
-# --- Check if submodule is dirty ---
-if [ -n "$(git -C "$REPO_ROOT/.operator/shared" status --porcelain)" ]; then
-    log_error "Submodule at $REPO_ROOT/.operator/shared is dirty. Aborting sync."
+# --- Check if shared repository is dirty ---
+if [ -n "$(git -C "$ROOT_SHARED" status --porcelain 2>/dev/null)" ]; then
+    root_log_error "Shared repository at $ROOT_SHARED is dirty. Aborting sync."
+    exit 1
+fi
+
+# --- Check if shared operator submodule is dirty relative to ROOT_CONFIGS ---
+if git -C "$ROOT_CONFIGS" status --porcelain | grep -q ".operator/shared"; then
+    root_log_error "Submodule at .operator/shared is dirty relative to ROOT_CONFIGS. Aborting sync."
     exit 1
 fi
 
 # --- Ensure that the NODE directory exists ---
-NODE_DIR_PATH="$REPO_ROOT/$NODE" # Construct full path
-if [ ! -d "$NODE_DIR_PATH" ]; then
+# ROOT_NODE_DIR is set by root_require_node
+if [ ! -d "$ROOT_NODE_DIR" ]; then
     # This error will be caught by the trap and a Telegram message sent.
-    log_error "Directory '$NODE_DIR_PATH' does not exist in the repository root. Cannot sync."
+    root_log_error "Directory '$ROOT_NODE_DIR' does not exist. Cannot sync."
     exit 1 # Exit, trap will handle notification
 fi
-log_info "Node directory '$NODE_DIR_PATH' found."
+root_log_info "Node directory '$ROOT_NODE_DIR' found."
 
 # --- Git Operations ---
-# Add the NODE folder to the staging area. We are already in REPO_ROOT.
-log_info "Staging changes in '$NODE' directory..."
-git add "$NODE" # Path relative to REPO_ROOT
+# cd to REPO_ROOT (ROOT_CONFIGS)
+cd "$ROOT_CONFIGS"
+root_log_info "Staging changes in '$ROOT_NODE' directory..."
+git add "$ROOT_NODE" 
 
-BRANCH_NAME="sync/$NODE"
-COMMIT_TIMESTAMP=$(get_timestamp) # For commit message
+BRANCH_NAME="sync/$ROOT_NODE"
+COMMIT_TIMESTAMP=$(date '+%Y-%m-%d %H:%M:%S')
 
 # Add these variables for bot identity:
 export GIT_AUTHOR_NAME="Adam Jensen [bot]"
@@ -65,58 +69,58 @@ export GIT_COMMITTER_NAME="Adam Jensen [bot]"
 export GIT_COMMITTER_EMAIL="adam@ermnvldmr.com"
 
 # Create the "sync/{NODE}" branch if it doesn't exist and check out
-log_info "Switching to branch '$BRANCH_NAME'..."
+root_log_info "Switching to branch '$BRANCH_NAME'..."
 if ! git rev-parse --verify "$BRANCH_NAME" > /dev/null 2>&1; then
-    log_info "Branch '$BRANCH_NAME' does not exist. Creating and checking out."
+    root_log_info "Branch '$BRANCH_NAME' does not exist. Creating and checking out."
     git checkout -b "$BRANCH_NAME"
 else
-    log_info "Branch '$BRANCH_NAME' exists. Checking out."
+    root_log_info "Branch '$BRANCH_NAME' exists. Checking out."
     git checkout "$BRANCH_NAME"
 fi
 
 # Check if there are any changes staged for commit
 if ! git diff --cached --quiet; then # --quiet to suppress output, rely on exit code
-    log_info "Changes detected. Committing..."
-    git commit -m "[$NODE] Auto-commit: $COMMIT_TIMESTAMP"
-    log_info "Commit successful."
+    root_log_info "Changes detected. Committing..."
+    git commit -m "[$ROOT_NODE] Auto-commit: $COMMIT_TIMESTAMP"
+    root_log_info "Commit successful."
 else
-    log_info "No changes to commit in '$NODE' directory."
+    root_log_info "No changes to commit in '$ROOT_NODE' directory."
 fi
 
 # Attempt to rebase onto origin/trunk
-log_info "Fetching origin/trunk..."
+root_log_info "Fetching origin/trunk..."
 git fetch origin trunk
-log_info "Rebasing '$BRANCH_NAME' onto origin/trunk..."
+root_log_info "Rebasing '$BRANCH_NAME' onto origin/trunk..."
 if ! git rebase origin/trunk; then
     # Error will be caught by trap, but specific message is good.
-    log_error "Rebase conflict detected for branch '$BRANCH_NAME' onto origin/trunk. Aborting rebase. Manual intervention required."
+    root_log_error "Rebase conflict detected for branch '$BRANCH_NAME' onto origin/trunk. Aborting rebase. Manual intervention required."
     git rebase --abort # Clean up failed rebase
     # Trap will send a generic error, but we can send a more specific one here too.
-    telegram_error "$TELEGRAM_TITLE_PREFIX" "$TELEGRAM_BOT_URL" "Rebase conflict. Manual intervention required. Rebase aborted." "$NODE"
+    root_core_telegram_error "$TELEGRAM_TITLE_PREFIX" "$TELEGRAM_BOT_URL" "Rebase conflict. Manual intervention required. Rebase aborted." "$ROOT_NODE"
     exit 1
 fi
-log_info "Rebase successful."
+root_log_info "Rebase successful."
 
 # Update submodules to match the rebased state
-log_info "Updating submodules (init + recursive)..."
+root_log_info "Updating submodules (init + recursive)..."
 if ! git submodule update --init --recursive; then
-    log_error "Failed to update submodules after rebase. Manual intervention may be required."
+    root_log_error "Failed to update submodules after rebase. Manual intervention may be required."
     exit 1
 fi
-log_info "Submodules updated successfully."
+root_log_info "Submodules updated successfully."
 
 # Push the changes to the remote repository
-log_info "Pushing changes for branch '$BRANCH_NAME' to origin (force-with-lease)..."
+root_log_info "Pushing changes for branch '$BRANCH_NAME' to origin (force-with-lease)..."
 if git push --force-with-lease origin "$BRANCH_NAME"; then
-    log_success "Successfully pushed '$BRANCH_NAME' to origin."
-    telegram_success "$TELEGRAM_TITLE_PREFIX" "$TELEGRAM_BOT_URL" "Sync to remote branch '$BRANCH_NAME' completed successfully." "$NODE"
+    root_log_success "Successfully pushed '$BRANCH_NAME' to origin."
+    root_core_telegram_success "$TELEGRAM_TITLE_PREFIX" "$TELEGRAM_BOT_URL" "Sync to remote branch '$BRANCH_NAME' completed successfully." "$ROOT_NODE"
 else
     # Error will be caught by trap.
-    log_error "Failed to push '$BRANCH_NAME' to origin."
+    root_log_error "Failed to push '$BRANCH_NAME' to origin."
     # Trap will send a generic error.
-    telegram_error "$TELEGRAM_TITLE_PREFIX" "$TELEGRAM_BOT_URL" "Failed to push to remote branch '$BRANCH_NAME'." "$NODE"
+    root_core_telegram_error "$TELEGRAM_TITLE_PREFIX" "$TELEGRAM_BOT_URL" "Failed to push to remote branch '$BRANCH_NAME'." "$ROOT_NODE"
     exit 1
 fi
 
-log_success "Remote sync completed for node: $NODE."
+root_log_success "Remote sync completed for node: $ROOT_NODE."
 

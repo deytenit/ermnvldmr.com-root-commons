@@ -15,13 +15,17 @@ args:
 EOF
 }
 
-REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
-SCRIPT_NAME="compose"
+# --- Context established by root entrypoint ---
+# ROOT_CONFIGS is the repo root.
+# Logging functions are available.
+
+# --- Node Context ---
+root_require_node "${1:-}"
+shift
 
 # --- Parse Arguments ---
-NODE="${1:-}"
-ACTION="${2:-}"
-shift 2 || true
+ACTION="${1:-}"
+shift || true
 
 DRY_RUN=false
 EXTRA_ARGS=()
@@ -39,18 +43,8 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-if [[ -z "$NODE" || -z "$ACTION" ]]; then
-    log_error "Usage: $0 <node> <action (up|down|restart)> [--dry-run] [extra_args...]"
-    exit 1
-fi
-
-export NODE
-setup_node_host_environment
-
-# --- Validation ---
-NODE_DIR="$REPO_ROOT/$NODE"
-if [[ ! -d "$NODE_DIR" ]]; then
-    log_error "Node directory not found: $NODE_DIR"
+if [[ -z "$ACTION" ]]; then
+    root_log_error "Usage: root compose <node> <action (up|down|restart)> [--dry-run] [extra_args...]"
     exit 1
 fi
 
@@ -62,20 +56,20 @@ run_compose() {
     local service_name="$(basename "$dir_path")"
     
     # If the dir is the node root, name it "node-infra"
-    if [[ "$dir_path" == "$NODE_DIR" ]]; then
+    if [[ "$dir_path" == "$ROOT_NODE_DIR" ]]; then
         service_name="node-infra"
     fi
 
-    log_info "Executing $action on $service_name..."
+    root_log_info "Executing $action on $service_name..."
     
     local cmd=(docker compose -f "$compose_file" "$action")
-    if [[ "$action" != "down" ]]; then
+    if [[ "$action" == "up" ]]; then
         cmd+=("-d")
     fi
     cmd+=("${EXTRA_ARGS[@]}")
 
     if [[ "$DRY_RUN" == "true" ]]; then
-        log_info "[DRY-RUN] ${cmd[*]}"
+        root_log_info "[DRY-RUN] ${cmd[*]}"
     else
         (cd "$dir_path" && "${cmd[@]}")
     fi
@@ -83,11 +77,12 @@ run_compose() {
 
 # --- Discovery ---
 services=()
-for entry in "$NODE_DIR"/*; do
+for entry in "$ROOT_NODE_DIR"/*; do
     [[ ! -d "$entry" ]] && continue
     dir_name="$(basename "$entry")"
     
-    # Exclude .operator and root (handled separately)
+    # Exclude @tier directories, .operator and root (handled separately)
+    [[ "$dir_name" == @tier* ]] && continue
     [[ "$dir_name" == ".operator" ]] && continue
     [[ "$dir_name" == "root" ]] && continue
     
@@ -97,32 +92,38 @@ for entry in "$NODE_DIR"/*; do
 done
 
 # Sort services alphabetically for stable order
-IFS=$'
-' sorted_services=($(sort <<<"${services[*]}"))
-unset IFS
+sorted_services=()
+if [[ "${#services[@]}" -gt 0 ]]; then
+    mapfile -t sorted_services < <(printf "%s\n" "${services[@]}" | sort)
+fi
 
 # --- Orchestration ---
 if [[ "$ACTION" == "down" ]]; then
     # REVERSE ORDER: Others -> Root -> Node Infra
+    # Reverse sorted_services for shutdown
+    if [[ "${#sorted_services[@]}" -gt 0 ]]; then
+        mapfile -t sorted_services < <(printf "%s\n" "${sorted_services[@]}" | tac)
+    fi
+
     for s in "${sorted_services[@]}"; do
         run_compose "$s" "$ACTION"
     done
     
-    if [[ -f "$NODE_DIR/root/docker-compose.yml" ]]; then
-        run_compose "$NODE_DIR/root/docker-compose.yml" "$ACTION"
+    if [[ -f "$ROOT_NODE_DIR/root/docker-compose.yml" ]]; then
+        run_compose "$ROOT_NODE_DIR/root/docker-compose.yml" "$ACTION"
     fi
     
-    if [[ -f "$NODE_DIR/docker-compose.yml" ]]; then
-        run_compose "$NODE_DIR/docker-compose.yml" "$ACTION"
+    if [[ -f "$ROOT_NODE_DIR/docker-compose.yml" ]]; then
+        run_compose "$ROOT_NODE_DIR/docker-compose.yml" "$ACTION"
     fi
 else
     # FORWARD ORDER: Node Infra -> Root -> Others
-    if [[ -f "$NODE_DIR/docker-compose.yml" ]]; then
-        run_compose "$NODE_DIR/docker-compose.yml" "$ACTION"
+    if [[ -f "$ROOT_NODE_DIR/docker-compose.yml" ]]; then
+        run_compose "$ROOT_NODE_DIR/docker-compose.yml" "$ACTION"
     fi
     
-    if [[ -f "$NODE_DIR/root/docker-compose.yml" ]]; then
-        run_compose "$NODE_DIR/root/docker-compose.yml" "$ACTION"
+    if [[ -f "$ROOT_NODE_DIR/root/docker-compose.yml" ]]; then
+        run_compose "$ROOT_NODE_DIR/root/docker-compose.yml" "$ACTION"
     fi
     
     for s in "${sorted_services[@]}"; do
@@ -130,5 +131,4 @@ else
     done
 fi
 
-log_success "Successfully orchestrated $ACTION for node $NODE."
-node $NODE."
+root_log_success "Successfully orchestrated $ACTION for node $ROOT_NODE."

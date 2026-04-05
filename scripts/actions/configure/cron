@@ -8,21 +8,15 @@ args:
 EOF
 }
 
-NODE="${1:-}"
-if [[ -z "$NODE" ]]; then
-    log_error "Usage: $0 <node>"
-    exit 1
-fi
-export NODE
-setup_node_host_environment
+root_require_node "${1:-}"
+shift
 
-NODE_DIR="$REPO_ROOT/$NODE"
-CONFIG_DIR="$NODE_DIR/.operator/configs/cron"
+CONFIG_DIR="$ROOT_NODE_DIR/.operator/configs/cron"
 CRONTAB_FILE="$CONFIG_DIR/crontab"
 
 if [[ -f "$CRONTAB_FILE" ]]; then
-    envsubst_crontab "$CRONTAB_FILE"
+    root_template_crontab "$CRONTAB_FILE"
 else
-    log_error "Crontab file not found: $CRONTAB_FILE"
+    root_log_error "Crontab file not found: $CRONTAB_FILE"
     exit 1
 fi
