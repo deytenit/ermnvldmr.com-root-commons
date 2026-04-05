@@ -61,7 +61,7 @@ if [ "${ROOT_WARM:-}" != "true" ]; then
         done
     fi
 
-    export ROOT_WARM="true"
+    ROOT_WARM="true"
 fi
 
 # Function to extract and parse metadata
