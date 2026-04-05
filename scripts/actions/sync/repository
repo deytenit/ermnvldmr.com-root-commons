@@ -32,15 +32,9 @@ root_core_setup_error_trap "$TELEGRAM_TITLE_PREFIX" "$TELEGRAM_BOT_URL" "$ROOT_N
 
 root_log_info "Starting remote sync for node: $ROOT_NODE"
 
-# --- Check if shared repository is dirty ---
+# --- Check if shared repository itself has uncommitted changes ---
 if [ -n "$(git -C "$ROOT_SHARED" status --porcelain 2>/dev/null)" ]; then
-    root_log_error "Shared repository at $ROOT_SHARED is dirty. Aborting sync."
-    exit 1
-fi
-
-# --- Check if shared operator submodule is dirty relative to ROOT_CONFIGS ---
-if git -C "$ROOT_CONFIGS" status --porcelain | grep -q ".operator/shared"; then
-    root_log_error "Submodule at .operator/shared is dirty relative to ROOT_CONFIGS. Aborting sync."
+    root_log_error "Shared repository at $ROOT_SHARED has uncommitted changes. Aborting sync."
     exit 1
 fi
 
@@ -56,8 +50,6 @@ root_log_info "Node directory '$ROOT_NODE_DIR' found."
 # --- Git Operations ---
 # cd to REPO_ROOT (ROOT_CONFIGS)
 cd "$ROOT_CONFIGS"
-root_log_info "Staging changes in '$ROOT_NODE' directory..."
-git add "$ROOT_NODE" 
 
 BRANCH_NAME="sync/$ROOT_NODE"
 COMMIT_TIMESTAMP=$(date '+%Y-%m-%d %H:%M:%S')
@@ -78,13 +70,21 @@ else
     git checkout "$BRANCH_NAME"
 fi
 
+# --- Stage Changes ---
+root_log_info "Staging changes in '$ROOT_NODE' directory..."
+git add "$ROOT_NODE" 
+
+root_log_info "Updating submodules to latest remote versions..."
+git submodule update --remote --recursive
+git add .operator/shared
+
 # Check if there are any changes staged for commit
 if ! git diff --cached --quiet; then # --quiet to suppress output, rely on exit code
     root_log_info "Changes detected. Committing..."
     git commit -m "[$ROOT_NODE] Auto-commit: $COMMIT_TIMESTAMP"
     root_log_info "Commit successful."
 else
-    root_log_info "No changes to commit in '$ROOT_NODE' directory."
+    root_log_info "No changes to commit (Node and Submodule pointers are already up-to-date)."
 fi
 
 # Attempt to rebase onto origin/trunk
@@ -123,4 +123,3 @@ else
 fi
 
 root_log_success "Remote sync completed for node: $ROOT_NODE."
-
