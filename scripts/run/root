@@ -35,14 +35,79 @@ if ! declare -f root_log_info >/dev/null; then
     done
 fi
 
-# 3. Help System (simplified for now)
+# Helper to extract and print a single-line description
+_root_print_action_metadata() {
+    local script_path="$1"
+    local base_dir="$2"
+    local rel_path="${script_path#$base_dir/}"
+    local desc
+    desc=$(awk '/action_metadata\(\) *\{/,/^EOF/' "$script_path" | grep 'description:' | head -n 1 | sed -E 's/.*description:[[:space:]]*"(.*)"/\1/' || true)
+    if [[ -n "$desc" ]]; then
+        printf "  %-30s %s\n" "$rel_path" "$desc"
+    else
+        printf "  %-30s (No description)\n" "$rel_path"
+    fi
+}
+
+# Helper to print the full metadata block for an action
+_root_print_full_action_help() {
+    local script_path="$1"
+    local rel_path="$2"
+    echo "Usage: root $rel_path [args...]"
+    echo ""
+    echo "Metadata:"
+    awk '/action_metadata\(\) *\{/,/^EOF/' "$script_path" | grep -vE 'action_metadata\(\)|cat <<EOF|^EOF' || true
+}
+
+# 3. Help System
 ACTION_PATH="${1:-}"
 if [[ -z "$ACTION_PATH" || "$ACTION_PATH" == "--help" ]]; then
     echo "Usage: root <action_path> [args...]"
-    # TODO: Add dynamic help listing
+    echo ""
+    echo "Available Actions:"
+    
+    echo "--- Local Actions ---"
+    has_local=false
+    if [[ -d "$ROOT_ACTIONS_LOCAL" ]]; then
+        while IFS= read -r script; do
+            [[ -z "$script" ]] && continue
+            _root_print_action_metadata "$script" "$ROOT_ACTIONS_LOCAL"
+            has_local=true
+        done < <(find "$ROOT_ACTIONS_LOCAL" -type f ! -name "*.*" | sort)
+    fi
+    [[ "$has_local" == false ]] && echo "  (None)"
+    
+    echo ""
+    echo "--- Shared Actions ---"
+    has_shared=false
+    if [[ -d "$ROOT_ACTIONS_SHARED" ]]; then
+        while IFS= read -r script; do
+            [[ -z "$script" ]] && continue
+            _root_print_action_metadata "$script" "$ROOT_ACTIONS_SHARED"
+            has_shared=true
+        done < <(find "$ROOT_ACTIONS_SHARED" -type f ! -name "*.*" | sort)
+    fi
+    [[ "$has_shared" == false ]] && echo "  (None)"
+    
     exit 0
 fi
 shift
+
+# Action-specific Help Interception
+# If the first argument passed to the action is --help, intercept it.
+if [[ "${1:-}" == "--help" ]]; then
+    action_file=""
+    if [[ -f "$ROOT_ACTIONS_LOCAL/$ACTION_PATH" ]]; then
+        action_file="$ROOT_ACTIONS_LOCAL/$ACTION_PATH"
+    elif [[ -f "$ROOT_ACTIONS_SHARED/$ACTION_PATH" ]]; then
+        action_file="$ROOT_ACTIONS_SHARED/$ACTION_PATH"
+    fi
+    
+    if [[ -n "$action_file" ]]; then
+        _root_print_full_action_help "$action_file" "$ACTION_PATH"
+        exit 0
+    fi
+fi
 
 export ROOT_ACTION_PATH="$ACTION_PATH"
 
