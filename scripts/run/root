@@ -1,10 +1,44 @@
 #!/usr/bin/env bash
 
-# Find the repository root
-REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
-export REPO_ROOT
+# Source - https://stackoverflow.com/a/246128
+# Posted by dogbane, modified by community. See post 'Timeline' for change history
+# Retrieved 2026-04-05, License - CC BY-SA 4.0
+get_script_dir()
+{
+    local SOURCE_PATH="${BASH_SOURCE[0]}"
+    local SYMLINK_DIR
+    local SCRIPT_DIR
+    # Resolve symlinks recursively
+    while [ -L "$SOURCE_PATH" ]; do
+        # Get symlink directory
+        SYMLINK_DIR="$( cd -P "$( dirname "$SOURCE_PATH" )" >/dev/null 2>&1 && pwd )"
+        # Resolve symlink target (relative or absolute)
+        SOURCE_PATH="$(readlink "$SOURCE_PATH")"
+        # Check if candidate path is relative or absolute
+        if [[ $SOURCE_PATH != /* ]]; then
+            # Candidate path is relative, resolve to full path
+            SOURCE_PATH=$SYMLINK_DIR/$SOURCE_PATH
+        fi
+    done
+    # Get final script directory path from fully resolved source path
+    SCRIPT_DIR="$(cd -P "$( dirname "$SOURCE_PATH" )" >/dev/null 2>&1 && pwd)"
+    echo "$SCRIPT_DIR"
+}
 
-SHARED_ROOT="$REPO_ROOT/.operator/shared"
+SCRIPT_DIR="$(get_script_dir)"
+
+# Determine SHARED_ROOT relative to the script location (scripts/run/root -> root-commons root)
+SHARED_ROOT="$(cd "$SCRIPT_DIR/../.." >/dev/null 2>&1 && pwd)"
+
+# If deployed as a shared operator commons, the structure is .operator/shared
+if [[ "$SHARED_ROOT" == */.operator/shared ]]; then
+    REPO_ROOT="$(cd "$SHARED_ROOT/../.." >/dev/null 2>&1 && pwd)"
+else
+    # Fallback: assume running standalone in the commons repository
+    REPO_ROOT="$SHARED_ROOT"
+fi
+
+export REPO_ROOT
 LOCAL_ROOT="$REPO_ROOT/.operator/local"
 
 # Implement "warm" environment check
