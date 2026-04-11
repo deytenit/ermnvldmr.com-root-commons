@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# check-package-updates <NODE> <TELEGRAM_BOT_URL>
+# check-package-updates <NODE> <TELEGRAM_BOT_URL> [TELEGRAM_PROXY]
 # Checks for pending security updates and Docker image updates, then sends a Telegram notification.
 
 action_metadata() {
@@ -9,6 +9,7 @@ description: "Checks for pending security updates and Docker image updates, then
 args:
   - NODE: "The node to check"
   - TELEGRAM_BOT_URL: "The Telegram Bot URL for notifications"
+  - TELEGRAM_PROXY: "(Optional) The proxy to use for Telegram notifications"
 EOF
 }
 
@@ -18,16 +19,17 @@ SCRIPT_NAME="check-package-updates"
 # --- Argument Parsing and Validation ---
 root_require_node "${1:-}"
 TELEGRAM_BOT_URL="${2:-}"
+TELEGRAM_PROXY="${3:-}"
 
 if [[ -z "$TELEGRAM_BOT_URL" ]]; then
     root_log_error "Missing required TELEGRAM_BOT_URL argument."
-    echo "Usage: $0 <NODE> <TELEGRAM_BOT_URL>"
+    echo "Usage: $0 <NODE> <TELEGRAM_BOT_URL> [TELEGRAM_PROXY]"
     exit 64
 fi
 
 # --- Setup Error Handling ---
 # This will send a Telegram notification if the script encounters an unhandled error
-root_core_setup_error_trap "Node Security Updates" "$TELEGRAM_BOT_URL" "$ROOT_NODE"
+root_core_setup_error_trap "Node Security Updates" "$TELEGRAM_BOT_URL" "$ROOT_NODE" "$TELEGRAM_PROXY"
 
 root_log_info "Starting security update check..."
 root_validate_debian_ubuntu
@@ -160,7 +162,7 @@ fi
 MESSAGE_BODY=""
 
 # Add APT section header
-MESSAGE_BODY="__APT:__"
+MESSAGE_BODY="*APT:*"
 
 # Add package results
 if [ -n "$PACKAGES_ERROR" ]; then
@@ -170,7 +172,7 @@ elif [ -n "$PACKAGES_RESULT" ]; then
 fi
 
 # Add Skopeo section header
-MESSAGE_BODY="${MESSAGE_BODY}"$'\n\n'"__Skopeo:__"
+MESSAGE_BODY="${MESSAGE_BODY}"$'\n\n'"*Skopeo:*"
 
 # Add image results
 if [ -n "$IMAGES_ERROR" ]; then
@@ -184,7 +186,8 @@ if [ -n "$MESSAGE_BODY" ]; then
     root_core_telegram_info "Node Security Updates" \
         "$TELEGRAM_BOT_URL" \
         "$MESSAGE_BODY" \
-        "$ROOT_NODE"
+        "$ROOT_NODE" \
+        "$TELEGRAM_PROXY"
     root_log_success "Update check completed and notification sent."
 else
 

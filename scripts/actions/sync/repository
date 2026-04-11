@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# sync-remote <NODE> <TELEGRAM_BOT_URL>
+# sync-remote <NODE> <TELEGRAM_BOT_URL> [TELEGRAM_PROXY]
 # Adds changes in the <NODE> directory, commits them to a sync/<NODE> branch,
 # rebases onto origin/trunk, and force-pushes. Notifies via Telegram.
 
@@ -10,6 +10,7 @@ description: "Adds changes in the node directory, commits them, rebases onto ori
 args:
   - NODE: "The node name"
   - TELEGRAM_BOT_URL: "The Telegram Bot URL for notifications"
+  - TELEGRAM_PROXY: "(Optional) The proxy to use for Telegram notifications"
 EOF
 }
 
@@ -20,15 +21,16 @@ root_require_node "${1:-}"
 shift
 
 TELEGRAM_BOT_URL="${1:-}"
+TELEGRAM_PROXY="${2:-}"
 
 if [[ -z "$TELEGRAM_BOT_URL" ]]; then
-    root_log_error "Usage: $0 <NODE> <TELEGRAM_BOT_URL>"
+    root_log_error "Usage: $0 <NODE> <TELEGRAM_BOT_URL> [TELEGRAM_PROXY]"
     exit 64
 fi
 
 # --- Setup Error Handling ---
 TELEGRAM_TITLE_PREFIX="Annual Remote Sync"
-root_core_setup_error_trap "$TELEGRAM_TITLE_PREFIX" "$TELEGRAM_BOT_URL" "$ROOT_NODE"
+root_core_setup_error_trap "$TELEGRAM_TITLE_PREFIX" "$TELEGRAM_BOT_URL" "$ROOT_NODE" "$TELEGRAM_PROXY"
 
 root_log_info "Starting remote sync for node: $ROOT_NODE"
 
@@ -96,7 +98,7 @@ if ! git rebase origin/trunk; then
     root_log_error "Rebase conflict detected for branch '$BRANCH_NAME' onto origin/trunk. Aborting rebase. Manual intervention required."
     git rebase --abort # Clean up failed rebase
     # Trap will send a generic error, but we can send a more specific one here too.
-    root_core_telegram_error "$TELEGRAM_TITLE_PREFIX" "$TELEGRAM_BOT_URL" "Rebase conflict. Manual intervention required. Rebase aborted." "$ROOT_NODE"
+    root_core_telegram_error "$TELEGRAM_TITLE_PREFIX" "$TELEGRAM_BOT_URL" "Rebase conflict. Manual intervention required. Rebase aborted." "$ROOT_NODE" "$TELEGRAM_PROXY"
     exit 1
 fi
 root_log_info "Rebase successful."
@@ -113,12 +115,12 @@ root_log_info "Submodules updated successfully."
 root_log_info "Pushing changes for branch '$BRANCH_NAME' to origin (force-with-lease)..."
 if git push --force-with-lease origin "$BRANCH_NAME"; then
     root_log_success "Successfully pushed '$BRANCH_NAME' to origin."
-    root_core_telegram_success "$TELEGRAM_TITLE_PREFIX" "$TELEGRAM_BOT_URL" "Sync to remote branch '$BRANCH_NAME' completed successfully." "$ROOT_NODE"
+    root_core_telegram_success "$TELEGRAM_TITLE_PREFIX" "$TELEGRAM_BOT_URL" "Sync to remote branch '$BRANCH_NAME' completed successfully." "$ROOT_NODE" "$TELEGRAM_PROXY"
 else
     # Error will be caught by trap.
     root_log_error "Failed to push '$BRANCH_NAME' to origin."
     # Trap will send a generic error.
-    root_core_telegram_error "$TELEGRAM_TITLE_PREFIX" "$TELEGRAM_BOT_URL" "Failed to push to remote branch '$BRANCH_NAME'." "$ROOT_NODE"
+    root_core_telegram_error "$TELEGRAM_TITLE_PREFIX" "$TELEGRAM_BOT_URL" "Failed to push to remote branch '$BRANCH_NAME'." "$ROOT_NODE" "$TELEGRAM_PROXY"
     exit 1
 fi
 

@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# sync-tiers <NODE> <TELEGRAM_BOT_URL>
+# sync-tiers <NODE> <TELEGRAM_BOT_URL> [TELEGRAM_PROXY]
 # Runs restic backup (one-shot) using the docker-compose file in the node's docker-compose.yml directory.
 # Sends Telegram notifications on success/failure. Mirrors the style & helpers of sync-tiers.
 
@@ -10,6 +10,7 @@ description: "Runs restic backup (one-shot) using the docker-compose file in the
 args:
   - NODE: "The node name"
   - TELEGRAM_BOT_URL: "The Telegram Bot URL for notifications"
+  - TELEGRAM_PROXY: "(Optional) The proxy to use for Telegram notifications"
 EOF
 }
 
@@ -19,15 +20,16 @@ root_require_node "${1:-}"
 shift
 
 TELEGRAM_BOT_URL="${1:-}"
+TELEGRAM_PROXY="${2:-}"
 
 if [[ -z "$TELEGRAM_BOT_URL" ]]; then
-    root_log_error "Usage: $0 <NODE> <TELEGRAM_BOT_URL>"
+    root_log_error "Usage: $0 <NODE> <TELEGRAM_BOT_URL> [TELEGRAM_PROXY]"
     exit 64
 fi
 
 # --- Setup Error Handling ---
 TELEGRAM_TITLE_PREFIX="Restic Host Backup"
-root_core_setup_error_trap "$TELEGRAM_TITLE_PREFIX" "$TELEGRAM_BOT_URL" "$ROOT_NODE"
+root_core_setup_error_trap "$TELEGRAM_TITLE_PREFIX" "$TELEGRAM_BOT_URL" "$ROOT_NODE" "$TELEGRAM_PROXY"
 
 root_log_info "Starting restic backup for node: $ROOT_NODE"
 
@@ -69,7 +71,7 @@ else
         root_log_info "Restic repository initialized."
     else
         root_log_error "Failed to initialize restic repository."
-        root_core_telegram_error "$TELEGRAM_TITLE_PREFIX" "$TELEGRAM_BOT_URL" "restic init failed" "$ROOT_NODE"
+        root_core_telegram_error "$TELEGRAM_TITLE_PREFIX" "$TELEGRAM_BOT_URL" "restic init failed" "$ROOT_NODE" "$TELEGRAM_PROXY"
         exit 1
     fi
 fi
@@ -80,7 +82,7 @@ if run_restic backup /data/@tier1 /data/@tier2 --host "$ROOT_NODE" --tag "$RESTI
     root_log_info "Backup command completed successfully."
 else
     root_log_error "restic backup failed."
-    root_core_telegram_error "$TELEGRAM_TITLE_PREFIX" "$TELEGRAM_BOT_URL" "restic backup failed" "$ROOT_NODE"
+    root_core_telegram_error "$TELEGRAM_TITLE_PREFIX" "$TELEGRAM_BOT_URL" "restic backup failed" "$ROOT_NODE" "$TELEGRAM_PROXY"
     exit 1
 fi
 
@@ -91,12 +93,12 @@ if run_restic forget --prune --keep-daily 7 --keep-weekly 4 --keep-monthly 12; t
     root_log_info "Retention policy applied successfully."
 else
     root_log_error "restic forget/prune failed."
-    root_core_telegram_error "$TELEGRAM_TITLE_PREFIX" "$TELEGRAM_BOT_URL" "restic forget/prune failed" "$ROOT_NODE"
+    root_core_telegram_error "$TELEGRAM_TITLE_PREFIX" "$TELEGRAM_BOT_URL" "restic forget/prune failed" "$ROOT_NODE" "$TELEGRAM_PROXY"
     exit 1
 fi
 
 # --- Success notification ---
 root_log_success "Restic backup completed successfully for node: $ROOT_NODE"
-root_core_telegram_success "$TELEGRAM_TITLE_PREFIX" "$TELEGRAM_BOT_URL" "Restic backup + retention succeeded for node: $ROOT_NODE" "$ROOT_NODE"
+root_core_telegram_success "$TELEGRAM_TITLE_PREFIX" "$TELEGRAM_BOT_URL" "Restic backup + retention succeeded for node: $ROOT_NODE" "$ROOT_NODE" "$TELEGRAM_PROXY"
 exit 0
 

@@ -72,29 +72,54 @@ root_core_telegram() {
     local message="$3"
     local node="${4:-${ROOT_NODE:-global}}"
     local type="${5:-INFO}"
+    local proxy="${6:-}"
 
     if [[ -z "$bot_url" ]]; then
         root_log_warn "Telegram Bot URL not provided. Skipping Telegram notification."
         return 0
     fi
 
-    local payload="[$node] [$type] $title"$'\n\n'"$message"
+    local timestamp
+    timestamp=$(date +'%Y-%m-%d %H:%M:%S %Z')
+
+    local formatted_type
+    formatted_type="#$(echo "$type" | tr '[:upper:]' '[:lower:]')"
+
+    local text_payload_parts=()
+    text_payload_parts+=("*${title}*")
+    text_payload_parts+=("")
+    if [[ -n "$node" && "$node" != "global" ]]; then
+        text_payload_parts+=("Node: ${node}")
+    fi
+    text_payload_parts+=("Timestamp: ${timestamp}")
+    text_payload_parts+=("Status: ${formatted_type}")
+    text_payload_parts+=("")
+    text_payload_parts+=("${message}")
+
+    local payload
+    payload=$(printf "%s\n" "${text_payload_parts[@]}")
     
     root_log_info "Sending Telegram notification ($type): $title"
     
+    local curl_opts=(-s -f -X POST --max-time 120)
+    if [[ -n "$proxy" ]]; then
+        curl_opts+=(-x "$proxy")
+    fi
+
     # Send to Telegram (assuming bot_url is the full API URL including token)
-    if ! curl -s -f -X POST "$bot_url" \
-        -d "text=$(echo "$payload" | sed 's/"/\\"/g')" > /dev/null; then
+    if ! curl "${curl_opts[@]}" "$bot_url" \
+        --data-urlencode "parse_mode=Markdown" \
+        --data-urlencode "text=${payload}" > /dev/null; then
         root_log_error "Failed to send Telegram notification."
         return 1
     fi
     return 0
 }
 
-root_core_telegram_success() { root_core_telegram "$1" "$2" "$3" "${4:-}" "SUCCESS"; }
-root_core_telegram_error() { root_core_telegram "$1" "$2" "$3" "${4:-}" "ERROR"; }
-root_core_telegram_info() { root_core_telegram "$1" "$2" "$3" "${4:-}" "INFO"; }
-root_core_telegram_warn() { root_core_telegram "$1" "$2" "$3" "${4:-}" "WARN"; }
+root_core_telegram_success() { root_core_telegram "$1" "$2" "$3" "${4:-}" "SUCCESS" "${5:-}"; }
+root_core_telegram_error() { root_core_telegram "$1" "$2" "$3" "${4:-}" "ERROR" "${5:-}"; }
+root_core_telegram_info() { root_core_telegram "$1" "$2" "$3" "${4:-}" "INFO" "${5:-}"; }
+root_core_telegram_warn() { root_core_telegram "$1" "$2" "$3" "${4:-}" "WARN" "${5:-}"; }
 
 # --- Error Handling ---
 
@@ -103,13 +128,14 @@ root_core_setup_error_trap() {
     local title="$1"
     local bot_url="${2:-}"
     local node="${3:-${ROOT_NODE:-global}}"
+    local proxy="${4:-}"
 
     _root_trap_handler() {
         local exit_code=$1
         local line_no=$2
         root_log_error "Error occurred in $ROOT_ACTION_PATH at line $line_no (exit code: $exit_code)"
         if [[ -n "$bot_url" ]]; then
-            root_core_telegram_error "$title" "$bot_url" "Critical error occurred at line $line_no (exit code: $exit_code)" "$node"
+            root_core_telegram_error "$title" "$bot_url" "Critical error occurred at line $line_no (exit code: $exit_code)" "$node" "$proxy"
         fi
     }
 
